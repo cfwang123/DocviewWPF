@@ -1,44 +1,25 @@
 # DocviewWPF
 
-Lightweight multi-tab document viewer for Windows (.NET Framework 4.8 WPF). Inspired by SumatraPDF: fast start, simple UI, open and read. **Supported formats: PDF (`.pdf`), Word (`.docx`), Excel (`.xlsx`).**
+Lightweight multi-tab document viewer for Windows (.NET Framework 4.8 WPF): fast start, simple UI, open and read. **Supported formats: PDF (`.pdf`), Word (`.docx`), Excel (`.xlsx`).**
 
 **Language:** [中文说明 (README.zh.md)](README.zh.md)
 
-## About
-
-| | |
-|--|--|
-| **Product** | DocviewWPF |
-| **Platform** | Windows x64 · .NET Framework 4.8 · WPF |
-| **Supported file formats** | **`.pdf`** · **`.docx`** · **`.xlsx`** |
-| **Not supported** | e.g. `.doc`, `.xls`, `.ppt`/`.pptx`, images-as-documents, plain text (unless added later) |
-
-Open via menu, toolbar, drag-and-drop, or command-line path argument. One tab per file; reopening focuses the existing tab.
-
 ## Features
 
-### Formats (detail)
+Highlights that set DocviewWPF apart from a plain PDF-only reader or office-only apps:
 
-| Extension | Format | Highlights |
-|-----------|--------|------------|
-| **`.pdf`** | PDF | Lazy page render (pdfium), continuous scroll, zoom / fit width / fit page, 90° rotate (`[` `]`), text select & copy, image context menu, **pro edit window** (object-level edit, vector save when possible) |
-| **`.docx`** | Word Open XML | Read-only flow layout; TOC (incl. SDT), numbering / bullets, margins |
-| **`.xlsx`** | Excel Open XML | Virtualized grid (`OnRender`); freeze panes, filters, column/row resize, wrap, simple edit & save |
+- **Three formats in one window** — open **PDF / DOCX / XLSX** side by side in tabs (not PDF-only).
+- **PDF Pro Editor** — dedicated window for page-object edit: select / marquee multi-select, drag with live ghost preview, text replace with embedded system fonts (CJK-safe), images, whiteout, shapes; undo/redo; vector-oriented save when pdfium allows.
+- **XLSX built for large sheets** — virtualized `OnRender` grid, freeze panes, filters, column/row resize, wrap, and a simple Excel-like edit mode (merge, align, font, colors, arrow/Tab navigation, block select).
+- **DOCX reading that keeps structure** — flow layout with outline (incl. SDT fields), numbering/bullets, margins — without launching Word.
+- **Chrome-style tabs** — reorder with animation, tear off into a new window while dragging, drop back to merge.
+- **True single-instance** — second launch activates the existing process and forwards open paths (no duplicate main windows).
+- **Session & reading progress** — optional restore of last tabs; per-file scroll/zoom/page/sheet memory for PDF, DOCX, and XLSX.
+- **Find with on-screen highlight** — Ctrl+F; all matches in view highlighted (current vs others), per-tab search text.
+- **UI in four languages** — 中文 / English / 日本語 / 한국어 (Help → Language, or Settings).
+- **Lightweight chrome** — custom title bar & icon toolbar, maximize within work area (no taskbar cover), `F` fullscreen.
 
-### UI & navigation
-
-- Multi-tab: one tab per file; reopening focuses existing tab
-- Tab drag: reorder, tear off to a new window, drop back to merge
-- Outline sidebar: PDF bookmarks / DOCX headings; filter & highlight
-- Sumatra-style chrome: custom title/toolbar, drag title bar, maximize without covering the taskbar, `F` fullscreen
-
-### Session
-
-- Optional restore of last open tabs
-- Per-file reading progress (scroll, zoom, page/sheet)
-- Recent files menu
-- Single-instance: second launch activates existing window and forwards open paths
-- **UI language**: Chinese / English / Japanese / Korean (Help → Language, or Settings)
+Also: outline sidebar, shared-read open for locked files, recent files, themes and UI font size.
 
 ## Requirements
 
@@ -48,31 +29,15 @@ Open via menu, toolbar, drag-and-drop, or command-line path argument. One tab pe
 
 ## Build & run
 
-Preferred (local helper scripts, if available):
-
-```bat
-slx DocviewWPF
-slr DocviewWPF
-```
-
-Or:
-
 ```bat
 dotnet restore DocviewWPF\DocviewWPF.csproj
 dotnet build DocviewWPF\DocviewWPF.csproj -c Release
 ```
 
-Output:
-
-```text
-DocviewWPF\bin\Release\net48\DocviewWPF.exe
-```
-
-Solution file: `DocviewWPF.slnx`.
+Output: `DocviewWPF\bin\Release\net48\DocviewWPF.exe`  
+Solution: `DocviewWPF.slnx`
 
 ## Configuration
-
-User settings and session data live under the current user’s application data folder (not in the repo):
 
 ```text
 %LocalAppData%\DocviewWPF\
@@ -82,11 +47,7 @@ User settings and session data live under the current user’s application data 
   recent.json
 ```
 
-Runtime logs (when running from build output):
-
-```text
-DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log
-```
+Runtime logs (from build output): `DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log`
 
 Do not commit secrets, API keys, passwords, or machine-specific paths.
 
@@ -111,14 +72,11 @@ Do not commit secrets, API keys, passwords, or machine-specific paths.
 DocviewWPF.slnx
 DocviewWPF/
   DocviewWPF.csproj
-  App.xaml(.cs)
-  MainWindow.xaml(.cs)
-  Core/           # settings, session, theme, log, single-instance
-  Viewers/        # PDF / DOCX / XLSX viewers & PDF pro editor
-  Assets/         # icon
-README.md
-README.zh.md
-CHANGELOG.md
+  App.xaml(.cs) · MainWindow.xaml(.cs)
+  Core/           # settings, session, theme, log, i18n, single-instance
+  Viewers/        # PDF / DOCX / XLSX & PDF pro editor
+  Assets/
+README.md · README.zh.md · CHANGELOG.md
 ```
 
 ## Dependencies (NuGet)
@@ -126,10 +84,6 @@ CHANGELOG.md
 - PDFtoImage (pdfium + SkiaSharp)
 - DocumentFormat.OpenXml
 - System.Memory / System.Runtime.CompilerServices.Unsafe
-
-## License / notes
-
-Internal / personal project tooling unless stated otherwise. Sample documents and local machine paths must not be committed (see `.gitignore`).
 
 ## Changelog
 

@@ -6,6 +6,7 @@
 # Project-local / private notes (optional keep out of remote)
 /AGENTS.md
 /mydocs/
+*.7z
 
 # Build outputs
 [Bb]in/

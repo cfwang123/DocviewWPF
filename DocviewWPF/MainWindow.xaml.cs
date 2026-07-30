@@ -292,8 +292,10 @@ public partial class MainWindow : Window {
 		mnsettings.Click += (_, _) => opensettings();
 		if (mnlang != null) buildlangmenu();
 		mabout.Click += (_, _) => {
+			var ver = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+			var verText = ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.0.1";
 			MessageBox.Show(
-				Loc.Tf("about_body", "0.1", Loc.T("about_features")),
+				Loc.Tf("about_body", verText, Loc.T("about_features")),
 				Loc.T("about"),
 				MessageBoxButton.OK,
 				MessageBoxImage.Information);

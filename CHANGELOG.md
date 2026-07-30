@@ -8,6 +8,10 @@ Versions follow [Semantic Versioning](https://semver.org/) when tagged.
 
 ## [Unreleased]
 
+---
+
+## [1.0.1] - 2026-07-31
+
 ### Added
 
 - **UI language switch**: 中文 / English / 日本語 / 한국어  
@@ -35,9 +39,10 @@ Versions follow [Semantic Versioning](https://semver.org/) when tagged.
 - Reading progress for PDF / DOCX / XLSX
 - XLSX freeze panes, column filters (check / contains / date)
 - DOCX SDT TOC, numbering / bullets, margins and hanging indent
-- Sumatra-style toolbar icons; caption drag / double-click maximize; maximize within work area; `F` fullscreen
+- Lightweight toolbar icons; caption drag / double-click maximize; maximize within work area; `F` fullscreen
 - PDF page rotate 90° with `[` `]`; high-DPI rendering
 - Shared-read / temp-copy open for locked files; async loading UI
+- Native DLLs only under `x64\` / `x86\` (root copies stripped; `NativeBootstrap` loads by architecture)
 
 ### Fixed
 
@@ -57,9 +62,9 @@ Versions follow [Semantic Versioning](https://semver.org/) when tagged.
   - Output: `DocviewWPF.exe`
   - Namespace / product: `DocviewWPF`
   - Settings folder: `%LocalAppData%\DocviewWPF\`
-  - Build: `slx DocviewWPF` / `slr DocviewWPF`
 - Tab session aggregates all live main windows; setting “restore last tabs”
 - User data directory name aligned with product (`DocviewWPF`)
+- Version **1.0.1** (Release)
 
 ---
 

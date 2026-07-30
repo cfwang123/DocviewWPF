@@ -1,44 +1,25 @@
 # DocviewWPF
 
-Windows 轻量多标签文档阅读器（.NET Framework 4.8 WPF）。风格接近 SumatraPDF：启动快、界面简、打开即读。**支持格式：PDF（`.pdf`）、Word（`.docx`）、Excel（`.xlsx`）。**
+Windows 轻量多标签文档阅读器（.NET Framework 4.8 WPF）：启动快、界面简、打开即读。**支持格式：PDF（`.pdf`）、Word（`.docx`）、Excel（`.xlsx`）。**
 
 **English:** [README.md](README.md)
 
-## 关于（About）
+## Features（功能特性）
 
-| | |
-|--|--|
-| **产品** | DocviewWPF |
-| **运行环境** | Windows x64 · .NET Framework 4.8 · WPF |
-| **支持的文件格式** | **`.pdf`** · **`.docx`** · **`.xlsx`** |
-| **当前不支持** | 例如 `.doc`、`.xls`、`.ppt`/`.pptx`、纯图片文档、纯文本等（后续可扩展） |
+相对「只读 PDF」类工具或「只跑 Office」的程序，DocviewWPF 更突出的能力：
 
-可通过菜单、工具栏、拖放或命令行路径打开。一文件一标签；重复打开会切换到已有标签。
+- **三格式同窗** — 同一应用内多标签打开 **PDF / DOCX / XLSX**，不是只能看 PDF。
+- **PDF 专业编辑** — 独立窗口做页对象级编辑：点选 / 框选多选、拖动幽灵预览跟手、中文安全改字（系统字体嵌入，避免 CID 崩溃）、插图 / 遮盖 / 矩形、撤销重做；在 pdfium 支持时尽量矢量保存。
+- **大表 XLSX** — 自绘虚拟化网格（`OnRender`）、冻结窗格、筛选、列宽行高、换行，以及接近 Excel 的简单编辑（合并、对齐、字体颜色、方向键/Tab、块选）。
+- **DOCX 结构阅读** — 流式排版 + 目录（含 SDT）、编号/项目符、页边距，无需启动 Word。
+- **Chrome 式标签** — 拖动排序（带动画）、拖出即成独立窗口、拖回合并。
+- **真单实例** — 二次启动只激活已有进程并转发打开路径，不堆多个主窗。
+- **会话与阅读进度** — 可选恢复上次标签；PDF / DOCX / XLSX 分别记住滚动、缩放、页/表位置。
+- **查找全屏高亮** — Ctrl+F；视口内全部匹配高亮（当前与其它区分），各 Tab 独立搜索框。
+- **四语界面** — 中文 / English / 日本語 / 한국어（帮助 → 语言，或系统参数）。
+- **轻量自绘壳** — 自绘标题栏与图标工具栏，最大化不挡任务栏，`F` 全屏。
 
-## 功能
-
-### 格式说明
-
-| 扩展名 | 格式 | 说明 |
-|--------|------|------|
-| **`.pdf`** | PDF | pdfium 按页懒渲染、连续滚动、缩放 / 适宽 / 适页、`[` `]` 旋转 90°、文字选中复制、图片右键复制/另存；**专业编辑窗口**（页对象级编辑，尽量矢量保存） |
-| **`.docx`** | Word Open XML | 只读流式排版；目录（含 SDT）、编号/项目符号、页边距 |
-| **`.xlsx`** | Excel Open XML | 虚拟化网格（OnRender）；冻结窗格、筛选、列宽/行高、换行、简单编辑与保存 |
-
-### 界面与导航
-
-- 多 Tab：一文件一标签；重复打开则切换到已有标签
-- Tab 拖动：排序、拖出独立窗口、拖回合并
-- 目录侧栏：PDF 书签 / DOCX 大纲；筛选高亮
-- Sumatra 风格：自绘标题栏与工具栏，拖动标题栏 / 双击最大化，最大化不挡任务栏，`F` 全屏
-
-### 会话
-
-- 可选恢复上次打开的标签
-- 按文件记忆阅读进度（滚动、缩放、页/表）
-- 最近文件菜单
-- 单实例：二次启动激活已有窗口并转发打开路径
-- **界面语言**：中文 / English / 日本語 / 한국어（帮助 → 语言，或系统参数）
+另有：目录侧栏、锁定文件共享打开、最近文件、主题与界面字号等。
 
 ## 环境要求
 
@@ -48,31 +29,15 @@ Windows 轻量多标签文档阅读器（.NET Framework 4.8 WPF）。风格接�
 
 ## 编译与运行
 
-本地推荐脚本（若已配置）：
-
-```bat
-slx DocviewWPF
-slr DocviewWPF
-```
-
-或：
-
 ```bat
 dotnet restore DocviewWPF\DocviewWPF.csproj
 dotnet build DocviewWPF\DocviewWPF.csproj -c Release
 ```
 
-输出：
-
-```text
-DocviewWPF\bin\Release\net48\DocviewWPF.exe
-```
-
-解决方案：`DocviewWPF.slnx`。
+输出：`DocviewWPF\bin\Release\net48\DocviewWPF.exe`  
+解决方案：`DocviewWPF.slnx`
 
 ## 配置位置
-
-设置与会话写在当前用户的应用数据目录（不在仓库内）：
 
 ```text
 %LocalAppData%\DocviewWPF\
@@ -82,11 +47,7 @@ DocviewWPF\bin\Release\net48\DocviewWPF.exe
   recent.json
 ```
 
-运行日志（从构建输出目录启动时）：
-
-```text
-DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log
-```
+运行日志（从构建输出启动时）：`DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log`
 
 请勿提交密钥、密码、API Key 或本机绝对路径。
 
@@ -111,14 +72,11 @@ DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log
 DocviewWPF.slnx
 DocviewWPF/
   DocviewWPF.csproj
-  App.xaml(.cs)
-  MainWindow.xaml(.cs)
-  Core/           # 设置、会话、主题、日志、单实例
+  App.xaml(.cs) · MainWindow.xaml(.cs)
+  Core/           # 设置、会话、主题、日志、i18n、单实例
   Viewers/        # PDF / DOCX / XLSX 与 PDF 专业编辑
-  Assets/         # 图标
-README.md
-README.zh.md
-CHANGELOG.md
+  Assets/
+README.md · README.zh.md · CHANGELOG.md
 ```
 
 ## 依赖（NuGet）
@@ -126,13 +84,6 @@ CHANGELOG.md
 - PDFtoImage（pdfium + SkiaSharp）
 - DocumentFormat.OpenXml
 - System.Memory / System.Runtime.CompilerServices.Unsafe
-
-## PDF 专业编辑（摘要）
-
-- 入口：工具菜单 / 工具栏「PDF 专业编辑」
-- 对象级选择、框选多选、拖动（幽灵预览跟手）
-- 文字：字符级 Unicode 显示；改字为安全替换（系统字体嵌入，避免 CID 原地 SetText 崩溃）
-- 尽量 `GenerateContent` + `ImportPages` + `SaveAsCopy` 矢量保存
 
 ## 变更记录
 

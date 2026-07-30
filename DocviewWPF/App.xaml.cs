@@ -8,6 +8,9 @@ public partial class App : Application {
 	static int showingError;
 
 	protected override void OnStartup(StartupEventArgs e) {
+		// 原生库在 x64\ / x86\，须在任何 pdfium/Skia 调用前设置搜索路径
+		try { NativeBootstrap.Init(); } catch { /* ignore */ }
+
 		DispatcherUnhandledException += (_, ev) => {
 			ev.Handled = true;
 			try { DocLog.Error("UI unhandled", ev.Exception); } catch { /* ignore */ }

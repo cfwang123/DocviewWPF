@@ -20,9 +20,10 @@
     <AssemblyName>DocviewWPF</AssemblyName>
     <RootNamespace>DocviewWPF</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>1.0.1</Version>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
+    <InformationalVersion>1.0.1</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -62,7 +63,7 @@
     <Resource Include="Assets\app.ico" />
   </ItemGroup>
 
-  <!-- 兜底清理：保留 x64 + x86，去掉 arm/musl/linux/osx 等 -->
+  <!-- 清理非 Win 原生库；原生 dll 只留 x64\ / x86\，删除输出根目录重复副本 -->
   <Target Name="StripNonWinX86X64Natives" AfterTargets="Build">
     <ItemGroup>
       <_NonKeepDir Include="$(OutputPath)arm" />
@@ -85,14 +86,17 @@
       <_NonKeepDir Include="$(OutputPath)runtimes\osx-x64" />
       <_NonKeepDir Include="$(OutputPath)runtimes\osx-arm64" />
     </ItemGroup>
-    <!-- 保留 x64\、x86\ 与根目录 pdfium/libSkiaSharp -->
     <RemoveDir Directories="@(_NonKeepDir)" Condition="Exists('%(Identity)')" />
     <ItemGroup>
       <_NonWinFile Include="$(OutputPath)**\*.so" />
       <_NonWinFile Include="$(OutputPath)**\*.dylib" />
       <_NonWinFile Include="$(OutputPath)**\*.a" />
+      <!-- 根目录重复：仅保留 x64\ / x86\ 下的原生库 -->
+      <_RootNative Include="$(OutputPath)pdfium.dll" />
+      <_RootNative Include="$(OutputPath)libSkiaSharp.dll" />
     </ItemGroup>
     <Delete Files="@(_NonWinFile)" TreatErrorsAsWarnings="true" Condition="'@(_NonWinFile)' != ''" />
+    <Delete Files="@(_RootNative)" TreatErrorsAsWarnings="true" Condition="'@(_RootNative)' != ''" />
   </Target>
 
 </Project>
