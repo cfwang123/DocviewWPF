@@ -1,0 +1,417 @@
+<Window x:Class="DocviewWPF.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="DocviewWPF"
+        Width="1100" Height="720"
+        MinWidth="640" MinHeight="420"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource BgApp}"
+        Icon="pack://application:,,,/Assets/app.ico"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        AllowDrop="True"
+        PreviewKeyDown="onpreviewkeydown"
+        StateChanged="onstatechanged"
+        FontSize="12">
+	<!-- CaptionHeight 与标题栏同高：空白区由系统负责拖动/双击最大化；交互控件需 IsHitTestVisibleInChrome -->
+	<shell:WindowChrome.WindowChrome>
+		<shell:WindowChrome CaptionHeight="28"
+		                    ResizeBorderThickness="6"
+		                    GlassFrameThickness="0"
+		                    CornerRadius="0"
+		                    UseAeroCaptionButtons="False"/>
+	</shell:WindowChrome.WindowChrome>
+
+	<Border x:Name="proot" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1" Background="{DynamicResource BgApp}">
+		<DockPanel>
+			<!-- 第 1 行：标题栏 = 汉堡菜单 + Tabs + 窗口按钮（仿 Sumatra） -->
+			<Border x:Name="ptitle" DockPanel.Dock="Top" Height="28"
+			        Background="{DynamicResource BgTitle}"
+			        BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,0,0,1"
+			        MouseLeftButtonDown="ontitledrag">
+				<Grid>
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="Auto"/>
+						<ColumnDefinition Width="*"/>
+						<ColumnDefinition Width="Auto"/>
+					</Grid.ColumnDefinitions>
+
+					<!-- 三横菜单 -->
+					<Menu x:Name="mnmain" Grid.Column="0" Background="Transparent" VerticalAlignment="Stretch"
+					      Padding="0" Margin="0"
+					      shell:WindowChrome.IsHitTestVisibleInChrome="True">
+						<MenuItem x:Name="mnhamburger" Padding="8,0" VerticalAlignment="Stretch"
+						          ToolTip="菜单">
+							<MenuItem.Header>
+								<TextBlock Text="☰" FontSize="14" FontWeight="Normal"
+								           Foreground="{DynamicResource TextPrimary}"
+								           VerticalAlignment="Center"/>
+							</MenuItem.Header>
+							<MenuItem x:Name="mnfile" Header="文件">
+								<MenuItem x:Name="mnopen" Header="打开(_O)..." InputGestureText="Ctrl+O"/>
+								<MenuItem x:Name="mnrecent" Header="最近文件(_R)"/>
+								<Separator/>
+								<MenuItem x:Name="mnprint" Header="打印(_P)..." InputGestureText="Ctrl+P"/>
+								<Separator/>
+								<MenuItem x:Name="mncopypath" Header="复制文件路径"/>
+								<MenuItem x:Name="mnshowinexplorer" Header="在资源管理器中显示"/>
+								<Separator/>
+								<MenuItem x:Name="mnclose" Header="关闭(_C)" InputGestureText="Ctrl+W"/>
+								<MenuItem x:Name="mncloseall" Header="关闭全部"/>
+								<Separator/>
+								<MenuItem x:Name="mnexit" Header="退出(_X)" InputGestureText="Alt+F4"/>
+							</MenuItem>
+							<MenuItem x:Name="mnview" Header="查看">
+								<MenuItem x:Name="mnzoomin" Header="放大" InputGestureText="Ctrl++"/>
+								<MenuItem x:Name="mnzoomout" Header="缩小" InputGestureText="Ctrl+-"/>
+								<MenuItem x:Name="mnzoom100" Header="实际大小 100%" InputGestureText="Ctrl+1"/>
+								<MenuItem x:Name="mnfitpage" Header="适合页面" InputGestureText="Ctrl+0"/>
+								<MenuItem x:Name="mnfitwidth" Header="适合宽度" InputGestureText="Ctrl+2"/>
+								<Separator/>
+								<MenuItem x:Name="mnprev" Header="上一页" InputGestureText="PgUp"/>
+								<MenuItem x:Name="mnnext" Header="下一页" InputGestureText="PgDn"/>
+								<MenuItem x:Name="mngotopage" Header="跳到页..." InputGestureText="Ctrl+G"/>
+								<Separator/>
+								<MenuItem x:Name="mnside" Header="目录侧栏" InputGestureText="F4" IsCheckable="True" IsChecked="True"/>
+							</MenuItem>
+							<MenuItem x:Name="mntools" Header="工具">
+								<MenuItem x:Name="mnpdfeditor" Header="PDF 专业编辑(_E)..."/>
+								<MenuItem x:Name="mnsettings" Header="系统参数(_P)..." InputGestureText="Ctrl+,"/>
+							</MenuItem>
+							<MenuItem x:Name="mnhelp" Header="帮助">
+								<MenuItem x:Name="mnlang" Header="语言"/>
+								<MenuItem x:Name="mabout" Header="关于 DocviewWPF"/>
+							</MenuItem>
+						</MenuItem>
+					</Menu>
+
+					<!-- Tabs 条：ScrollViewer 本身不进 chrome（空白可拖窗）；各 Tab 芯片单独 IsHitTestVisibleInChrome -->
+					<ScrollViewer x:Name="svtabs" Grid.Column="1"
+					              HorizontalScrollBarVisibility="Hidden"
+					              VerticalScrollBarVisibility="Disabled"
+					              VerticalAlignment="Stretch"
+					              Background="Transparent">
+						<StackPanel x:Name="ptabs" Orientation="Horizontal" VerticalAlignment="Stretch"
+						            Background="Transparent"/>
+					</ScrollViewer>
+
+					<!-- 窗口按钮 -->
+					<StackPanel Grid.Column="2" Orientation="Horizontal"
+					            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+						<Button x:Name="bmin" Style="{StaticResource CapBtn}" ToolTip="最小化" Content="─"/>
+						<Button x:Name="bmax" Style="{StaticResource CapBtn}" ToolTip="最大化" Content="□"/>
+						<Button x:Name="bclosewin" Style="{StaticResource CapBtnClose}" ToolTip="关闭" Content="✕"/>
+					</StackPanel>
+				</Grid>
+			</Border>
+
+			<!-- 第 2 行：Sumatra 风格工具栏（图标来自 Tabler / Sumatra SvgIcons 线框） -->
+			<Border x:Name="ptoolbar" DockPanel.Dock="Top" Background="{DynamicResource BgToolbar}"
+			        BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,0,0,1" Padding="6,2" MinHeight="28">
+				<StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+					<!-- 打开（folder） -->
+					<Button x:Name="bopen" Style="{StaticResource ToolIconBtn}" ToolTip="打开 (Ctrl+O)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M5,4 h4 l3,3 h7 a2,2 0 0 1 2,2 v8 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-11 a2,2 0 0 1 2,-2"/>
+					</Button>
+					<!-- 打印（printer） -->
+					<Button x:Name="bprint" Style="{StaticResource ToolIconBtn}" ToolTip="打印 (Ctrl+P)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M17,17 h2 a2,2 0 0 0 2,-2 v-4 a2,2 0 0 0 -2,-2 h-14 a2,2 0 0 0 -2,2 v4 a2,2 0 0 0 2,2 h2 M17,9 v-4 a2,2 0 0 0 -2,-2 h-6 a2,2 0 0 0 -2,2 v4 M7,13 h10 a2,2 0 0 1 2,2 v4 a2,2 0 0 1 -2,2 h-10 a2,2 0 0 1 -2,-2 v-4 a2,2 0 0 1 2,-2"/>
+					</Button>
+
+					<!-- 页码: [n] / total -->
+					<TextBlock x:Name="lbpagelabel" Text="页码:" VerticalAlignment="Center" Margin="8,0,4,0"
+					           Foreground="{DynamicResource TextMuted}"/>
+					<TextBox x:Name="epage" Width="48" Height="22"
+					         VerticalContentAlignment="Center" HorizontalContentAlignment="Right"
+					         Padding="2,0,4,0" Margin="0,0,2,0"
+					         ToolTip="页码 (Ctrl+G)"
+					         BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
+					         Background="White"/>
+					<TextBlock x:Name="lbpagetotal" Text="/ 0" VerticalAlignment="Center" Margin="2,0,2,0"
+					           Foreground="{DynamicResource TextMuted}" MinWidth="40"/>
+
+					<!-- 上一页 / 下一页（arrow-left / arrow-right） -->
+					<Button x:Name="bprev" Style="{StaticResource ToolIconBtn}" ToolTip="上一页 (PgUp)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M5,12 L19,12 M5,12 L11,18 M5,12 L11,6"/>
+					</Button>
+					<Button x:Name="bnext" Style="{StaticResource ToolIconBtn}" ToolTip="下一页 (PgDn)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M5,12 L19,12 M13,18 L19,12 M13,6 L19,12"/>
+					</Button>
+
+					<!-- 单页适页（square） -->
+					<Button x:Name="bfitpage" Style="{StaticResource ToolIconBtn}" ToolTip="适合单页 (Ctrl+0)" Margin="6,0,0,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,4 h16 a2,2 0 0 1 2,2 v12 a2,2 0 0 1 -2,2 h-16 a2,2 0 0 1 -2,-2 v-12 a2,2 0 0 1 2,-2"/>
+					</Button>
+					<!-- 连续适宽（layout-rows） -->
+					<Button x:Name="bfitwidth" Style="{StaticResource ToolIconBtn}" ToolTip="适合宽度并连续显示 (Ctrl+2)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M3,3 h18 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-18 a2,2 0 0 1 -2,-2 v-14 a2,2 0 0 1 2,-2 M3,12 L21,12"/>
+					</Button>
+					<!-- 逆时针旋转 -->
+					<Button x:Name="brotatel" Style="{StaticResource ToolIconBtn}" ToolTip="向左旋转 90° ([)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M15,4.55 a8,8 0 0 0 -6,14.9 M9,14 v6 h-6"/>
+					</Button>
+					<!-- 顺时针旋转 -->
+					<Button x:Name="brotater" Style="{StaticResource ToolIconBtn}" ToolTip="向右旋转 90° (])">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M9,4.55 a8,8 0 0 1 6,14.9 M15,14 v6 h6"/>
+					</Button>
+					<!-- 缩小（zoom-out） -->
+					<Button x:Name="bzoomout" Style="{StaticResource ToolIconBtn}" ToolTip="缩小 (Ctrl+-)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M10,10 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 M7,10 L13,10 M21,21 L15,15"/>
+					</Button>
+					<!-- 放大（zoom-in） -->
+					<Button x:Name="bzoomin" Style="{StaticResource ToolIconBtn}" ToolTip="放大 (Ctrl++)">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M10,10 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 M7,10 L13,10 M10,7 L10,13 M21,21 L15,15"/>
+					</Button>
+
+					<!-- 查找 -->
+					<TextBlock x:Name="lbfindlabel" Text="查找:" VerticalAlignment="Center" Margin="10,0,4,0"
+					           Foreground="{DynamicResource TextMuted}"/>
+					<TextBox x:Name="efind" Width="140" Height="22" VerticalContentAlignment="Center"
+					         Margin="0,0,2,0" Padding="6,0"
+					         ToolTip="查找 (Ctrl+F /)"
+					         BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
+					         Background="White"/>
+					<!-- 上一个（chevron-left） -->
+					<Button x:Name="bfindprev" Style="{StaticResource ToolIconBtn}" ToolTip="上一个">
+						<Path Style="{StaticResource ToolIconPath}" Data="M15,6 L9,12 L15,18"/>
+					</Button>
+					<!-- 下一个（chevron-right） -->
+					<Button x:Name="bfindnext" Style="{StaticResource ToolIconBtn}" ToolTip="下一个">
+						<Path Style="{StaticResource ToolIconPath}" Data="M9,6 L15,12 L9,18"/>
+					</Button>
+					<TextBlock x:Name="lbfind" Text="" VerticalAlignment="Center"
+					           Margin="2,0,4,0" MinWidth="28"
+					           Foreground="{DynamicResource TextMuted}" FontSize="11"/>
+					<!-- 区分大小写 Aa -->
+					<ToggleButton x:Name="bcase" Style="{StaticResource CaseToggle}"
+					              Width="28" Height="22" Margin="0,0,0,0"
+					              Content="Aa" FontSize="11" FontWeight="SemiBold"
+					              ToolTip="区分大小写"/>
+
+					<!-- XLSX / PDF 编辑入口 -->
+					<Button x:Name="bxlsxedit" Style="{StaticResource ToolIconBtn}" Margin="8,0,0,0"
+					        ToolTip="编辑表格" Visibility="Collapsed">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,20 L4,16 L16,4 a2,2 0 0 1 2.8,0 l1.2,1.2 a2,2 0 0 1 0,2.8 L8,20 L4,20 M13,7 L17,11"/>
+					</Button>
+					<Button x:Name="bxlsxsave" Style="{StaticResource ToolIconBtn}"
+					        ToolTip="保存 (Ctrl+S)" Visibility="Collapsed">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M5,4 h11 l3,3 v12 a1,1 0 0 1 -1,1 h-13 a1,1 0 0 1 -1,-1 v-14 a1,1 0 0 1 1,-1 M8,4 v5 h8 v-5 M8,20 v-6 h8 v6"/>
+					</Button>
+					<!-- PDF 编辑 -->
+					<Button x:Name="bpfdedit" Style="{StaticResource ToolIconBtn}" Margin="8,0,0,0"
+					        ToolTip="编辑 PDF" Visibility="Collapsed">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M14,3 h4 a2,2 0 0 1 2,2 v14 a2,2 0 0 1 -2,2 h-12 a2,2 0 0 1 -2,-2 v-10 z M14,3 v4 h4 M8,13 h8 M8,17 h6"/>
+					</Button>
+					<Button x:Name="bpdfsave" Style="{StaticResource ToolIconBtn}"
+					        ToolTip="保存 PDF (Ctrl+S)" Visibility="Collapsed">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M5,4 h11 l3,3 v12 a1,1 0 0 1 -1,1 h-13 a1,1 0 0 1 -1,-1 v-14 a1,1 0 0 1 1,-1 M8,4 v5 h8 v-5 M8,20 v-6 h8 v6"/>
+					</Button>
+				</StackPanel>
+			</Border>
+
+			<!-- PDF 编辑工具栏 -->
+			<Border x:Name="ppdfedit" DockPanel.Dock="Top" Background="{DynamicResource BgToolbar}"
+			        BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,0,0,1"
+			        Padding="6,2" MinHeight="28" Visibility="Collapsed">
+				<StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+					<!-- 选择 -->
+					<Button x:Name="bpdfsel" Style="{StaticResource ToolIconBtn}" ToolTip="选择/移动">
+						<Path Style="{StaticResource ToolIconPath}" Data="M4,4 L4,16 L8,12 L11,18 L13,17 L10,11 L16,11 Z"/>
+					</Button>
+					<!-- 添加文字 -->
+					<Button x:Name="bpdftext" Style="{StaticResource ToolIconBtn}" ToolTip="添加文字（再点页面）">
+						<Path Style="{StaticResource ToolIconPath}" Data="M4,6 h16 M12,6 v14 M8,20 h8"/>
+					</Button>
+					<!-- 添加图片 -->
+					<Button x:Name="bpdfimg" Style="{StaticResource ToolIconBtn}" ToolTip="插入图片">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,5 h16 a1,1 0 0 1 1,1 v12 a1,1 0 0 1 -1,1 h-16 a1,1 0 0 1 -1,-1 v-12 a1,1 0 0 1 1,-1 M8,11 a2,2 0 1 0 0.01,0 M4,17 l5,-5 l3,3 l4,-4 l5,6"/>
+					</Button>
+					<!-- 从选区改字 -->
+					<Button x:Name="bpdfedittext" Style="{StaticResource ToolIconBtn}" ToolTip="编辑选中原文（覆盖为可改文字）" Margin="0,0,6,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,20 L4,16 L14,6 a1.5,1.5 0 0 1 2,0 l2,2 a1.5,1.5 0 0 1 0,2 L8,20 Z M12,8 L16,12"/>
+					</Button>
+					<!-- 删除 -->
+					<Button x:Name="bpdfdel" Style="{StaticResource ToolIconBtn}" ToolTip="删除选中对象" Margin="0,0,6,0">
+						<Path Style="{StaticResource ToolIconPath}" Data="M4,7 h16 M9,7 v-2 h6 v2 M8,7 v12 h8 v-12"/>
+					</Button>
+					<ComboBox x:Name="cpdffont" Width="110" Height="22" Margin="0,0,4,0" IsEditable="True"
+					          ToolTip="字体" VerticalContentAlignment="Center"/>
+					<ComboBox x:Name="cpdffontsize" Width="52" Height="22" Margin="0,0,4,0" IsEditable="True"
+					          ToolTip="字号" VerticalContentAlignment="Center"/>
+					<ToggleButton x:Name="bpdfbold" Style="{StaticResource ToolIconToggle}" ToolTip="粗体">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M7,5 h6 a3.5,3.5 0 0 1 0,7 h-6 z M7,12 h7 a3.5,3.5 0 0 1 0,7 h-7 z" StrokeThickness="1.8"/>
+					</ToggleButton>
+					<ToggleButton x:Name="bpdfitalic" Style="{StaticResource ToolIconToggle}" ToolTip="斜体" Margin="0,0,4,0">
+						<Path Style="{StaticResource ToolIconPath}" Data="M10,5 h8 M6,19 h8 M14,5 L10,19" StrokeThickness="1.6"/>
+					</ToggleButton>
+					<Button x:Name="bpdffore" Style="{StaticResource ToolIconBtn}" ToolTip="文字颜色">
+						<Grid Width="16" Height="16">
+							<Path Style="{StaticResource ToolIconPath}" Width="16" Height="12" VerticalAlignment="Top"
+							      Data="M4,13 L8,3 h2 L14,13 M6,10 h6"/>
+							<Border Height="3" VerticalAlignment="Bottom" Background="#111827" Margin="1,0"/>
+						</Grid>
+					</Button>
+					<Button x:Name="bpdfback" Style="{StaticResource ToolIconBtn}" ToolTip="文字背景色">
+						<Grid Width="16" Height="16">
+							<Path Style="{StaticResource ToolIconPath}"
+							      Data="M4,14 L12,6 a2,2 0 0 1 2.8,0 l1.2,1.2 a2,2 0 0 1 0,2.8 L8,18 L4,18 z"/>
+							<Border Height="3" VerticalAlignment="Bottom" Background="#FFEB9C" Margin="1,0"/>
+						</Grid>
+					</Button>
+				</StackPanel>
+			</Border>
+
+			<!-- XLSX 编辑工具栏：仅编辑模式显示（图标 + ToolTip） -->
+			<Border x:Name="pxlsxedit" DockPanel.Dock="Top" Background="{DynamicResource BgToolbar}"
+			        BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,0,0,1"
+			        Padding="6,2" MinHeight="28" Visibility="Collapsed">
+				<StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+					<!-- 合并单元格 -->
+					<Button x:Name="bxmerge" Style="{StaticResource ToolIconBtn}" ToolTip="合并选中单元格">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,6 h6 v4 h-6 z M14,6 h6 v4 h-6 z M4,14 h6 v4 h-6 z M14,14 h6 v4 h-6 z M10,8 h4 M10,16 h4 M8,10 v4 M16,10 v4"/>
+					</Button>
+					<!-- 取消合并 -->
+					<Button x:Name="bxunmerge" Style="{StaticResource ToolIconBtn}" ToolTip="取消合并" Margin="0,0,6,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,6 h16 v12 h-16 z M12,6 v12 M4,12 h16 M9,9 l6,6 M15,9 l-6,6"/>
+					</Button>
+					<!-- 水平左对齐 -->
+					<Button x:Name="bxalignl" Style="{StaticResource ToolIconBtn}" ToolTip="水平左对齐">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,6 h16 M4,10 h10 M4,14 h16 M4,18 h10"/>
+					</Button>
+					<!-- 水平居中 -->
+					<Button x:Name="bxalignc" Style="{StaticResource ToolIconBtn}" ToolTip="水平居中">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,6 h16 M7,10 h10 M4,14 h16 M7,18 h10"/>
+					</Button>
+					<!-- 水平右对齐 -->
+					<Button x:Name="bxalignr" Style="{StaticResource ToolIconBtn}" ToolTip="水平右对齐" Margin="0,0,6,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,6 h16 M10,10 h10 M4,14 h16 M10,18 h10"/>
+					</Button>
+					<!-- 垂直顶端 -->
+					<Button x:Name="bxvalignt" Style="{StaticResource ToolIconBtn}" ToolTip="垂直顶端对齐">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,5 h16 M8,9 h8 M8,13 h8 M8,17 h8"/>
+					</Button>
+					<!-- 垂直居中 -->
+					<Button x:Name="bxvalignm" Style="{StaticResource ToolIconBtn}" ToolTip="垂直居中对齐">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M8,5 h8 M8,9 h8 M4,12 h16 M8,15 h8 M8,19 h8"/>
+					</Button>
+					<!-- 垂直底端 -->
+					<Button x:Name="bxvalignb" Style="{StaticResource ToolIconBtn}" ToolTip="垂直底端对齐" Margin="0,0,6,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M8,5 h8 M8,9 h8 M8,13 h8 M4,19 h16"/>
+					</Button>
+					<!-- 字体 / 字号（保留可编辑下拉，非按钮） -->
+					<ComboBox x:Name="cxfont" Width="110" Height="22" Margin="0,0,4,0" IsEditable="True"
+					          ToolTip="字体" VerticalContentAlignment="Center"/>
+					<ComboBox x:Name="cxfontsize" Width="52" Height="22" Margin="0,0,4,0" IsEditable="True"
+					          ToolTip="字号" VerticalContentAlignment="Center"/>
+					<!-- 粗体 -->
+					<ToggleButton x:Name="bxbold" Style="{StaticResource ToolIconToggle}" Width="28" Height="26"
+					              ToolTip="粗体" Margin="0,0,0,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M7,5 h6 a3.5,3.5 0 0 1 0,7 h-6 z M7,12 h7 a3.5,3.5 0 0 1 0,7 h-7 z" StrokeThickness="1.8"/>
+					</ToggleButton>
+					<!-- 斜体 -->
+					<ToggleButton x:Name="bxitalic" Style="{StaticResource ToolIconToggle}" Width="28" Height="26"
+					              ToolTip="斜体" Margin="0,0,6,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M10,5 h8 M6,19 h8 M14,5 L10,19" StrokeThickness="1.6"/>
+					</ToggleButton>
+					<!-- 文字颜色 A + 下划线色条 -->
+					<Button x:Name="bxfore" Style="{StaticResource ToolIconBtn}" ToolTip="文字颜色">
+						<Grid Width="16" Height="16">
+							<Path Style="{StaticResource ToolIconPath}" Width="16" Height="12"
+							      VerticalAlignment="Top"
+							      Data="M4,13 L8,3 h2 L14,13 M6,10 h6"/>
+							<Border x:Name="bxforebar" Height="3" VerticalAlignment="Bottom"
+							        Background="#111827" CornerRadius="0.5" Margin="1,0"/>
+						</Grid>
+					</Button>
+					<!-- 填充底色 -->
+					<Button x:Name="bxback" Style="{StaticResource ToolIconBtn}" ToolTip="单元格背景色">
+						<Grid Width="16" Height="16">
+							<Path Style="{StaticResource ToolIconPath}"
+							      Data="M4,14 L12,6 a2,2 0 0 1 2.8,0 l1.2,1.2 a2,2 0 0 1 0,2.8 L8,18 L4,18 z M14,5 l2,2"/>
+							<Border x:Name="bxbackbar" Height="3" VerticalAlignment="Bottom"
+							        Background="#FFEB9C" CornerRadius="0.5" Margin="1,0"/>
+						</Grid>
+					</Button>
+					<!-- 自动换行：单元格 / 行 / 列 -->
+					<ToggleButton x:Name="bxwrap" Style="{StaticResource ToolIconToggle}" Width="28" Height="26"
+					              ToolTip="单元格自动换行" Margin="6,0,0,0">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M4,6 h12 M4,10 h10 M4,14 h8 M14,12 l4,2 l-4,2"/>
+					</ToggleButton>
+					<Button x:Name="bxwraprow" Style="{StaticResource ToolIconBtn}" ToolTip="选中行整行自动换行">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M3,5 h18 M3,10 h18 M3,15 h18 M3,19 h10 M15,17 l3,2 l-3,2"/>
+					</Button>
+					<Button x:Name="bxwrapcol" Style="{StaticResource ToolIconBtn}" ToolTip="选中列整列自动换行">
+						<Path Style="{StaticResource ToolIconPath}"
+						      Data="M5,3 v18 M10,3 v18 M15,3 v18 M19,3 v10 M17,15 l2,3 l2,-3"/>
+					</Button>
+				</StackPanel>
+			</Border>
+
+			<!-- 底栏 -->
+			<Border x:Name="pstatus" DockPanel.Dock="Bottom" Height="20" Background="{DynamicResource BgStatus}"
+			        BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,1,0,0" Padding="6,0">
+				<DockPanel>
+					<TextBlock x:Name="lbstatus" Text="就绪 · 打开 PDF / DOCX / XLSX，或拖放到窗口"
+					           VerticalAlignment="Center" FontSize="10"
+					           Foreground="{DynamicResource TextMuted}"/>
+					<TextBlock x:Name="lbpath" Text="" VerticalAlignment="Center" FontSize="10"
+					           HorizontalAlignment="Right" Opacity="0.85"
+					           Foreground="{DynamicResource TextMuted}"
+					           TextTrimming="CharacterEllipsis" Margin="12,0,0,0"/>
+				</DockPanel>
+			</Border>
+
+			<!-- 内容：仅显示选中页，无 Tab 头 -->
+			<Grid>
+				<StackPanel x:Name="pempty" VerticalAlignment="Center" HorizontalAlignment="Center" Opacity="0.9">
+					<TextBlock Text="DocviewWPF" FontSize="24" FontWeight="SemiBold"
+					           Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center"/>
+					<TextBlock Text="超快启动 · 多标签文档阅读器" FontSize="13" Margin="0,6,0,0"
+					           Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center"/>
+					<TextBlock Text="支持 PDF · DOCX · XLSX" FontSize="12" Margin="0,12,0,0"
+					           Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center"/>
+					<TextBlock Text="Ctrl+O 打开 · 拖放文件" FontSize="11" Margin="0,16,0,0"
+					           Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center"/>
+				</StackPanel>
+
+				<!-- 无标签头的 TabControl：只承载内容 -->
+				<TabControl x:Name="tabs" Visibility="Collapsed"
+				            Background="Transparent"
+				            BorderThickness="0"
+				            Padding="0"
+				            Style="{StaticResource TabContentOnly}"
+				            SelectionChanged="ontabchanged"/>
+			</Grid>
+		</DockPanel>
+	</Border>
+</Window>

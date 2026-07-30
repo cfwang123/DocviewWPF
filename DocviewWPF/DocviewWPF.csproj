@@ -1,0 +1,98 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <!-- 只保留 Windows 的 x64 和 x86 原生资产 -->
+    <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <Product>DocviewWPF</Product>
+    <AssemblyName>DocviewWPF</AssemblyName>
+    <RootNamespace>DocviewWPF</RootNamespace>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PDF 渲染：pdfium + SkiaSharp，按页懒加载 -->
+    <PackageReference Include="PDFtoImage" Version="5.1.1" />
+    <!-- DOCX / XLSX 解析 -->
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
+    <PackageReference Include="System.Memory" Version="4.6.3" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <!-- 屏蔽 PDFtoImage / SkiaSharp 拉进来的非 Windows 原生包，减少输出体积 -->
+  <ItemGroup>
+    <PackageReference Include="bblanchon.PDFium.Linux" Version="139.0.7215">
+      <ExcludeAssets>all</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="bblanchon.PDFium.macOS" Version="139.0.7215">
+      <ExcludeAssets>all</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.0">
+      <ExcludeAssets>all</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" Version="3.119.0">
+      <ExcludeAssets>all</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+
+  <!-- 兜底清理：保留 x64 + x86，去掉 arm/musl/linux/osx 等 -->
+  <Target Name="StripNonWinX86X64Natives" AfterTargets="Build">
+    <ItemGroup>
+      <_NonKeepDir Include="$(OutputPath)arm" />
+      <_NonKeepDir Include="$(OutputPath)arm64" />
+      <_NonKeepDir Include="$(OutputPath)loongarch64" />
+      <_NonKeepDir Include="$(OutputPath)riscv64" />
+      <_NonKeepDir Include="$(OutputPath)musl-arm" />
+      <_NonKeepDir Include="$(OutputPath)musl-arm64" />
+      <_NonKeepDir Include="$(OutputPath)musl-x64" />
+      <_NonKeepDir Include="$(OutputPath)musl-x86" />
+      <_NonKeepDir Include="$(OutputPath)musl-loongarch64" />
+      <_NonKeepDir Include="$(OutputPath)musl-riscv64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\win-arm64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\linux-x64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\linux-arm" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\linux-arm64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\linux-musl-x64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\linux-musl-arm" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\linux-musl-arm64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\osx-x64" />
+      <_NonKeepDir Include="$(OutputPath)runtimes\osx-arm64" />
+    </ItemGroup>
+    <!-- 保留 x64\、x86\ 与根目录 pdfium/libSkiaSharp -->
+    <RemoveDir Directories="@(_NonKeepDir)" Condition="Exists('%(Identity)')" />
+    <ItemGroup>
+      <_NonWinFile Include="$(OutputPath)**\*.so" />
+      <_NonWinFile Include="$(OutputPath)**\*.dylib" />
+      <_NonWinFile Include="$(OutputPath)**\*.a" />
+    </ItemGroup>
+    <Delete Files="@(_NonWinFile)" TreatErrorsAsWarnings="true" Condition="'@(_NonWinFile)' != ''" />
+  </Target>
+
+</Project>

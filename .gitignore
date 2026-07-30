@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# DocviewWPF — Git ignore
+# Do not commit local paths, secrets, passwords, or API keys.
+# ---------------------------------------------------------------------------
+
+# Project-local / private notes (optional keep out of remote)
+/AGENTS.md
+/mydocs/
+
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+publish/
+out/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.dotCover
+*.ncrunch*
+_NCrunch_*
+*.nupkg
+
+# NuGet
+packages/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+**/project.assets.json
+*.nuget.dgspec.json
+*.nuget.g.props
+*.nuget.g.targets
+project.nuget.cache
+
+# Local temp & scratch (scripts, backups, samples, dumps)
+tmp/
+**/tmp/
+*.tmp
+*.temp
+*.bak
+*.~*
+*.log
+*.pdb
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# Shortcuts / local launchers (may embed machine paths)
+*.lnk
+
+# Secrets — never commit
+*secret*
+*secrets*
+*password*
+*passwd*
+*credential*
+*.pfx
+*.p12
+*.key
+*.pem
+*.env
+.env.*
+!.env.example
+appsettings.*.local.json
+**/appsettings.Development.json
+**/local.settings.json
+*apikey*
+*api_key*
+*ApiKey*
+*token*.json
+
+# Runtime data that may contain user paths
+**/logs/
+**/zoomshot/
+
+# Large / personal sample documents (keep repo lean)
+*.pdf
+*.docx
+*.xlsx
+!DocviewWPF/Assets/**
+# If you need sample fixtures in-repo later, place under samples/ and force-add:
+# !samples/**
+
+# JetBrains / Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
