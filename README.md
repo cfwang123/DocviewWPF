@@ -1,6 +1,6 @@
 # DocviewWPF
 
-Lightweight multi-tab document viewer for Windows (.NET Framework 4.8 WPF): fast start, simple UI, open and read. **Supported formats: PDF (`.pdf`), Word (`.docx`), Excel (`.xlsx`).**
+Windows multi-tab document app (.NET Framework 4.8 WPF) for **PDF / DOCX / XLSX**. Core features: fast open & continuous PDF reading, **PDF pro edit** (object-level text/image), large-sheet **XLSX** virtual grid with simple edit, DOCX structure view, Chrome-style tabs, single-instance, session restore, four UI languages (zh/en/ja/ko).
 
 **Language:** [中文说明 (README.zh.md)](README.zh.md)
 
@@ -48,8 +48,6 @@ Solution: `DocviewWPF.slnx`
 ```
 
 Runtime logs (from build output): `DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log`
-
-Do not commit secrets, API keys, passwords, or machine-specific paths.
 
 ## Keyboard shortcuts
 

@@ -1,6 +1,6 @@
 # DocviewWPF
 
-Windows 轻量多标签文档阅读器（.NET Framework 4.8 WPF）：启动快、界面简、打开即读。**支持格式：PDF（`.pdf`）、Word（`.docx`）、Excel（`.xlsx`）。**
+Windows 多标签文档应用（.NET Framework 4.8 WPF），支持 **PDF / DOCX / XLSX**。核心能力：快速打开与 PDF 连续阅读、**PDF 专业编辑**（对象级文字/图片）、大表 **XLSX** 虚拟网格与简单编辑、DOCX 结构阅读、Chrome 式标签、单实例、会话恢复、四语界面（中/英/日/韩）。
 
 **English:** [README.md](README.md)
 
@@ -48,8 +48,6 @@ dotnet build DocviewWPF\DocviewWPF.csproj -c Release
 ```
 
 运行日志（从构建输出启动时）：`DocviewWPF\bin\Release\net48\logs\docviewwpf_YYYYMMDD.log`
-
-请勿提交密钥、密码、API Key 或本机绝对路径。
 
 ## 快捷键
 
