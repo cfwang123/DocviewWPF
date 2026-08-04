@@ -20,6 +20,8 @@
     <AssemblyName>DocviewWPF</AssemblyName>
     <RootNamespace>DocviewWPF</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- PerMonitorV2：换显示器/DPI 时真重布局，避免整窗被系统拉伸发糊 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>1.0.1</Version>
     <AssemblyVersion>1.0.1.0</AssemblyVersion>
     <FileVersion>1.0.1.0</FileVersion>
@@ -28,15 +30,21 @@
 
   <ItemGroup>
     <!-- PDF 渲染：pdfium + SkiaSharp，按页懒加载 -->
+    <PackageReference Include="Emoji.Wpf" Version="0.3.4" />
     <PackageReference Include="PDFtoImage" Version="5.1.1" />
     <!-- DOCX / XLSX 解析 -->
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
     <PackageReference Include="System.Memory" Version="4.6.3" />
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
+    <!-- MD 预览：WebView2 HTML 渲染 -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
   </ItemGroup>
 
   <ItemGroup>
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 
   <!-- 屏蔽 PDFtoImage / SkiaSharp 拉进来的非 Windows 原生包，减少输出体积 -->
@@ -61,6 +69,16 @@
 
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
+    <!-- Mermaid / highlight.js 预览（离线）；复制到输出 Assets\ -->
+    <Content Include="Assets\mermaid.min.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\highlight.min.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\highlight-github.min.css">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- 清理非 Win 原生库；原生 dll 只留 x64\ / x86\，删除输出根目录重复副本 -->

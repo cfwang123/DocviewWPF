@@ -198,7 +198,7 @@ static class OutlineUi {
 			Margin = new Thickness(8, 0, 8, 6),
 			Padding = new Thickness(8, 4, 8, 4),
 			FontSize = AppSettings.Current.UiFontSize,
-			ToolTip = "筛选目录：只显示匹配的章节并高亮关键字",
+			ToolTip = "筛选章节：只显示匹配的标题并高亮关键字",
 		};
 	}
 }

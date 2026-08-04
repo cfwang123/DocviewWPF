@@ -112,6 +112,30 @@ static class PdfiumNative {
 		out int hasXVal, out int hasYVal, out int hasZoomVal,
 		out float x, out float y, out float zoom);
 
+	// ---------- 页内链接（书内跳转 / URI）----------
+	public const uint PDFACTION_UNSUPPORTED = 0;
+	public const uint PDFACTION_GOTO = 1;
+	public const uint PDFACTION_REMOTEGOTO = 2;
+	public const uint PDFACTION_URI = 3;
+	public const uint PDFACTION_LAUNCH = 4;
+
+	/// <summary>点命中页内链接。x/y 为 PDF 用户空间（原点左下，Y 向上，单位 pt）。</summary>
+	[DllImport("pdfium", CallingConvention = CC)]
+	public static extern IntPtr FPDFLink_GetLinkAtPoint(IntPtr page, double x, double y);
+
+	[DllImport("pdfium", CallingConvention = CC)]
+	public static extern IntPtr FPDFLink_GetDest(IntPtr document, IntPtr link);
+
+	[DllImport("pdfium", CallingConvention = CC)]
+	public static extern IntPtr FPDFLink_GetAction(IntPtr link);
+
+	[DllImport("pdfium", CallingConvention = CC)]
+	public static extern uint FPDFAction_GetType(IntPtr action);
+
+	/// <summary>URI 动作目标路径（UTF-8）。buffer=null 时返回所需字节数（含 \0）。</summary>
+	[DllImport("pdfium", CallingConvention = CC)]
+	public static extern uint FPDFAction_GetURIPath(IntPtr document, IntPtr action, byte[] buffer, uint buflen);
+
 	// ---------- 页对象类型 ----------
 	public const int FPDF_PAGEOBJ_TEXT = 1;
 	public const int FPDF_PAGEOBJ_PATH = 2;

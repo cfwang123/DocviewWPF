@@ -73,7 +73,7 @@
 			<Setter Property="Height" Value="16"/>
 		</Style>
 
-		<!-- 图标 Toggle（粗体/斜体等） -->
+		<!-- 图标 Toggle（粗体/斜体/编辑模式等）：选中时浅底+描边，与普通悬停区分 -->
 		<Style x:Key="ToolIconToggle" TargetType="ToggleButton">
 			<Setter Property="Background" Value="Transparent"/>
 			<Setter Property="BorderThickness" Value="0"/>
@@ -86,6 +86,7 @@
 				<Setter.Value>
 					<ControlTemplate TargetType="ToggleButton">
 						<Border x:Name="bd" Background="{TemplateBinding Background}"
+						        BorderBrush="Transparent" BorderThickness="1"
 						        CornerRadius="3" Padding="{TemplateBinding Padding}">
 							<ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
 						</Border>
@@ -95,6 +96,7 @@
 							</Trigger>
 							<Trigger Property="IsChecked" Value="True">
 								<Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSoft}"/>
+								<Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent}"/>
 							</Trigger>
 							<Trigger Property="IsEnabled" Value="False">
 								<Setter Property="Opacity" Value="0.4"/>

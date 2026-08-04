@@ -27,12 +27,23 @@ sealed class VirtualSheetGrid : UserControl {
 	const double MIN_COL_W = 4;
 	const double MIN_ROW_H = 2;
 	const double RESIZE_MIN_COL = 12;
-	const double RESIZE_MAX_COL = 800;
+	/// <summary>列宽不设实用上限（仅防溢出用极大值）。</summary>
+	const double RESIZE_MAX_COL = 1e7;
 	const double RESIZE_MIN_ROW = 8;
 	const double RESIZE_MAX_ROW = 400;
-	const double EDGE_HIT = 5;
+	/// <summary>列/行分隔线命中半宽（DIP）；略大便于双击 autofit。</summary>
+	const double EDGE_HIT = 6;
+	/// <summary>双击列边 autofit 时额外放宽命中（相对 EDGE_HIT）。</summary>
+	const double EDGE_HIT_AUTOFIT = 10;
 	const int AUTOFIT_FULL_CELL_MAX = 2500;
 	const int AUTOFIT_SKIP_ROWS = 3000;
+	/// <summary>双击自适应列宽最多扫描行数（大表上限）。</summary>
+	const int AUTOFIT_COL_MAX_ROWS = 8000;
+	/// <summary>
+	/// 表体高度低于此值才用视口撑大 outer。
+	/// 长表若随最大化改 outer 宽，WPF 会对数万 DIP 高的 Canvas 做整表布局，卡顿约 1s。
+	/// </summary>
+	const double EXPAND_VIEWPORT_MAX_BODY_H = 8000;
 	/// <summary>滚动停稳后多久切回完整绘制（ms）。</summary>
 	const int SCROLL_SETTLE_MS = 90;
 	/// <summary>进度/状态回调节流（ms）。</summary>
@@ -63,6 +74,8 @@ sealed class VirtualSheetGrid : UserControl {
 
 	int selR0 = -1, selC0 = -1, selR1 = -1, selC1 = -1;
 	bool selecting;
+	/// <summary>正在拖选整列（列头）/ 整行（行号）。</summary>
+	bool selectingCols, selectingRows;
 	int anchorR, anchorC;
 	/// <summary>当前活动格（Shift+方向键块选时移动此角，锚点不变）。</summary>
 	int activeR = -1, activeC = -1;
@@ -116,6 +129,8 @@ sealed class VirtualSheetGrid : UserControl {
 
 	readonly SolidColorBrush brushGrid = brush(0xE5, 0xE7, 0xEB);
 	readonly SolidColorBrush brushHdr = brush(0xF3, 0xF4, 0xF6);
+	/// <summary>行号/列头处于选区内时的高亮底。</summary>
+	readonly SolidColorBrush brushHdrSel = brush(0xBF, 0xDB, 0xFE);
 	readonly SolidColorBrush brushSel = brush(0xBF, 0xDB, 0xFE);
 	readonly SolidColorBrush brushSelBorder = brush(0x25, 0x63, 0xEB);
 	readonly SolidColorBrush brushText = brush(0x11, 0x18, 0x27);
@@ -153,6 +168,8 @@ sealed class VirtualSheetGrid : UserControl {
 			Background = Brushes.White,
 			HorizontalAlignment = HorizontalAlignment.Left,
 			VerticalAlignment = VerticalAlignment.Top,
+			// surface 按视口尺寸钉在滚动偏移上，可大于 outer（长表 outer 不随视口撑开）
+			ClipToBounds = false,
 		};
 		surface = new SheetSurface(this) {
 			SnapsToDevicePixels = true,
@@ -198,9 +215,13 @@ sealed class VirtualSheetGrid : UserControl {
 		bindscrollnav();
 		scroll.PreviewKeyDown += onkey;
 		scroll.ScrollChanged += (_, e) => {
-			// 范围变化时同步 outer 尺寸
-			if (e.ExtentHeightChange != 0 || e.ExtentWidthChange != 0)
-				applytablesize();
+			// 拖列宽/行高时 outer 已由 apply*resize 更新；再走这里会二次全量 Invalidate，末列尤其卡
+			if (resizingCol || resizingRow) {
+				if (e.HorizontalChange != 0 || e.VerticalChange != 0)
+					pinviewport();
+				return;
+			}
+			// Extent 变化来自 applytablesize 写 outer，切勿再 applytablesize（会循环布局）
 			pinviewport();
 			var moved = e.HorizontalChange != 0 || e.VerticalChange != 0;
 			if (moved) {
@@ -213,11 +234,15 @@ sealed class VirtualSheetGrid : UserControl {
 					try { ScrollProgressChanged?.Invoke(); } catch { /* ignore */ }
 				}
 			}
+			// 仅滚动偏移变化需要重绘；纯 Extent 变化 pin 后尺寸已对，仍 Invalidate 一次即可
 			surface.InvalidateVisual();
 		};
-		scroll.SizeChanged += (_, _) => {
-			pinviewport();
-			surface.InvalidateVisual();
+		// 最大化/改窗体：只钉视口；长表不在这里撑 outer（见 applytablesize / onviewportresized）
+		scroll.SizeChanged += (_, _) => onviewportresized();
+		SizeChanged += (_, e) => {
+			// 首次从 0 获得实际尺寸时补一刀（Tab 切换）
+			if (e.PreviousSize.Width < 2 || e.PreviousSize.Height < 2)
+				onviewportresized();
 		};
 		// Ctrl+滚轮：以鼠标位置为中心缩放
 		scroll.PreviewMouseWheel += onpreviewwheel;
@@ -239,7 +264,11 @@ sealed class VirtualSheetGrid : UserControl {
 		};
 		surface.LostMouseCapture += (_, _) => {
 			if (resizingCol || resizingRow) endresize();
-			if (selecting) selecting = false;
+			if (selecting) {
+				selecting = false;
+				selectingCols = false;
+				selectingRows = false;
+			}
 		};
 		Focusable = true;
 		surface.Focusable = true;
@@ -302,6 +331,14 @@ sealed class VirtualSheetGrid : UserControl {
 		applytablesize();
 		pinviewport();
 		surface.InvalidateVisual();
+		// 布局完成后再钉一次视口：打开瞬间 Viewport 常为 0，否则 surface 尺寸不对会整页空白
+		try {
+			Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => {
+				if (model == null) return;
+				applytablesize();
+				surface.InvalidateVisual();
+			}));
+		} catch { /* ignore */ }
 	}
 
 	void setupfilterrange() {
@@ -471,6 +508,9 @@ sealed class VirtualSheetGrid : UserControl {
 	}
 
 	public bool HasSelection => selR0 >= 0 && selC0 >= 0;
+	/// <summary>当前表行数 / 列数（供状态栏描述选区）。</summary>
+	public int Rows => rows;
+	public int Cols => cols;
 	public bool EditMode {
 		get => editMode;
 		set {
@@ -875,16 +915,29 @@ sealed class VirtualSheetGrid : UserControl {
 	/// 将自绘层钉在当前滚动偏移，尺寸=视口。
 	/// 表坐标 (x,y) 绘制到 surface 局部坐标 (x-originX, y-originY)。
 	/// </summary>
+	/// <summary>窗口/控件尺寸变化（含最大化）：轻量钉视口，避免长表重写 outer 触发布局风暴。</summary>
+	void onviewportresized() {
+		if (scroll == null || surface == null) return;
+		// 短表：outer 可能需随视口撑开；长表：只改 surface 尺寸
+		if (totalBodyH < EXPAND_VIEWPORT_MAX_BODY_H)
+			applytablesize();
+		else
+			pinviewport();
+		surface.InvalidateVisual();
+	}
+
 	void pinviewport() {
 		if (scroll == null || surface == null || outer == null) return;
 		var ho = scroll.HorizontalOffset;
 		var vo = scroll.VerticalOffset;
 		var vw = scroll.ViewportWidth;
 		var vh = scroll.ViewportHeight;
-		if (vw < 2) vw = scroll.ActualWidth;
-		if (vh < 2) vh = scroll.ActualHeight;
-		if (vw < 2) vw = 800;
-		if (vh < 2) vh = 600;
+		if (double.IsNaN(vw) || vw < 2) vw = scroll.ActualWidth;
+		if (double.IsNaN(vh) || vh < 2) vh = scroll.ActualHeight;
+		if (double.IsNaN(vw) || vw < 2) vw = ActualWidth;
+		if (double.IsNaN(vh) || vh < 2) vh = ActualHeight;
+		if (double.IsNaN(vw) || vw < 2) vw = 800;
+		if (double.IsNaN(vh) || vh < 2) vh = 600;
 		originX = ho;
 		originY = vo;
 		viewX = ho;
@@ -893,23 +946,34 @@ sealed class VirtualSheetGrid : UserControl {
 		viewH = vh;
 		Canvas.SetLeft(surface, ho);
 		Canvas.SetTop(surface, vo);
-		surface.Width = vw;
-		surface.Height = vh;
+		// 始终写入有限尺寸，避免 Width=NaN 时 OnRender 画不出任何内容
+		if (double.IsNaN(surface.Width) || Math.Abs(surface.Width - vw) > 0.5)
+			surface.Width = vw;
+		if (double.IsNaN(surface.Height) || Math.Abs(surface.Height - vh) > 0.5)
+			surface.Height = vh;
 	}
 
 	void applytablesize() {
 		var w = Math.Max(ROW_HDR_W + 1, ROW_HDR_W + totalBodyW + 1);
 		var h = Math.Max(HDR_H + 1, HDR_H + totalBodyH + 1);
-		// 内容小于视口时仍撑满，避免 ScrollViewer 把短表垂直居中
-		if (scroll != null) {
-			if (scroll.ViewportWidth > 2) w = Math.Max(w, scroll.ViewportWidth);
-			if (scroll.ViewportHeight > 2) h = Math.Max(h, scroll.ViewportHeight);
-			else if (scroll.ActualHeight > 2) h = Math.Max(h, scroll.ActualHeight);
-			if (scroll.ActualWidth > 2) w = Math.Max(w, scroll.ActualWidth);
+		// 仅短表用视口撑 outer。长表最大化时若 outer 宽随视口变，会触发「超高 Canvas」整表布局 → 卡顿约 1s。
+		// 视口铺满由 pinviewport(surface=视口大小) 负责。
+		if (scroll != null && totalBodyH < EXPAND_VIEWPORT_MAX_BODY_H) {
+			var svw = scroll.ViewportWidth;
+			var svh = scroll.ViewportHeight;
+			if (!double.IsNaN(svw) && svw > 2) w = Math.Max(w, svw);
+			if (!double.IsNaN(svh) && svh > 2) h = Math.Max(h, svh);
+			else if (!double.IsNaN(scroll.ActualHeight) && scroll.ActualHeight > 2)
+				h = Math.Max(h, scroll.ActualHeight);
+			if (!double.IsNaN(scroll.ActualWidth) && scroll.ActualWidth > 2)
+				w = Math.Max(w, scroll.ActualWidth);
 		}
 		if (outer != null) {
-			outer.Width = w;
-			outer.Height = h;
+			// 首次 outer.Width/Height 为 NaN：Math.Abs(NaN-w)>0.5 为 false，会永远不写入 → 空白表
+			if (double.IsNaN(outer.Width) || Math.Abs(outer.Width - w) > 0.5)
+				outer.Width = w;
+			if (double.IsNaN(outer.Height) || Math.Abs(outer.Height - h) > 0.5)
+				outer.Height = h;
 		}
 		pinviewport();
 	}
@@ -924,8 +988,9 @@ sealed class VirtualSheetGrid : UserControl {
 			return;
 		}
 		var srcW = model.ColWidths;
-		colW = new double[cols];
-		colX = new double[cols + 1];
+		// 列数未变则复用数组，拖列宽时减少 GC
+		if (colW == null || colW.Length != cols) colW = new double[cols];
+		if (colX == null || colX.Length != cols + 1) colX = new double[cols + 1];
 		colX[0] = 0;
 		for (var c = 0; c < cols; c++) {
 			var baseW = (srcW != null && c < srcW.Length && srcW[c] > 0) ? srcW[c] : DEF_COL_W;
@@ -945,8 +1010,8 @@ sealed class VirtualSheetGrid : UserControl {
 			return;
 		}
 		var srcH = model.RowHeights;
-		rowH = new double[rows];
-		rowY = new double[rows + 1];
+		if (rowH == null || rowH.Length != rows) rowH = new double[rows];
+		if (rowY == null || rowY.Length != rows + 1) rowY = new double[rows + 1];
 		rowY[0] = 0;
 		for (var r = 0; r < rows; r++) {
 			var baseH = (srcH != null && r < srcH.Length && srcH[r] > 0) ? srcH[r] : DEF_ROW_H;
@@ -960,31 +1025,97 @@ sealed class VirtualSheetGrid : UserControl {
 		totalBodyH = rowY[rows];
 	}
 
+	/// <summary>仅更新一列显示宽与后续 colX（拖列宽热路径，避免整表 rebuild）。</summary>
+	void patchcolmetrics(int col, double baseW) {
+		if (col < 0 || col >= cols || colW == null || colX == null || colW.Length != cols) {
+			rebuildmetrics();
+			return;
+		}
+		var z = zoom > 0.01 ? zoom : 1.0;
+		var nw = Math.Max(0, baseW * z);
+		if (nw > 0 && nw < MIN_COL_W * z) nw = MIN_COL_W * z;
+		var delta = nw - colW[col];
+		if (Math.Abs(delta) < 0.001) return;
+		colW[col] = nw;
+		for (var c = col + 1; c <= cols; c++)
+			colX[c] += delta;
+		totalBodyW = colX[cols];
+	}
+
+	/// <summary>仅更新一行显示高与后续 rowY。</summary>
+	void patchrowmetrics(int row, double baseH) {
+		if (row < 0 || row >= rows || rowH == null || rowY == null || rowH.Length != rows) {
+			rebuildmetrics();
+			return;
+		}
+		var z = zoom > 0.01 ? zoom : 1.0;
+		var nh = Math.Max(0, baseH * z);
+		if (nh > 0 && nh < MIN_ROW_H * z) nh = MIN_ROW_H * z;
+		var delta = nh - rowH[row];
+		if (Math.Abs(delta) < 0.001) return;
+		rowH[row] = nh;
+		for (var r = row + 1; r <= rows; r++)
+			rowY[r] += delta;
+		totalBodyH = rowY[rows];
+	}
+
 	void autofitrowheights() {
+		// 打开表时全表扫一遍；交互路径请用 autofitrowheightsforcol
+		autofitrowheightsforcol(-1);
+	}
+
+	/// <summary>
+	/// 按换行内容抬高行高。col&gt;=0 时只处理「宽度依赖该列」的行（改列宽/双击自适应热路径）；
+	/// col&lt;0 时全表（打开时）。交互路径一律非 precise，避免 FormattedText 卡顿数秒。
+	/// </summary>
+	void autofitrowheightsforcol(int col) {
 		if (rows <= 0 || cols <= 0 || model == null) return;
 		if (rows >= AUTOFIT_SKIP_ROWS) return;
 		ensurecolwidths();
 		ensurerowheights();
 
-		var candidates = 0;
-		for (var r = 0; r < rows && candidates <= AUTOFIT_FULL_CELL_MAX; r++) {
-			if (r >= model.RowHeights.Length || model.RowHeights[r] <= 0) continue;
-			var rowCells = model.Cells != null && r < model.Cells.Length ? model.Cells[r] : null;
-			if (rowCells == null) continue;
-			for (var c = 0; c < cols && c < rowCells.Length; c++) {
-				var sc = rowCells[c];
-				if (sc == null || sc.HiddenByMerge || string.IsNullOrEmpty(sc.Text)) continue;
-				if (sc.WrapText || sc.Text.IndexOf('\n') >= 0 || sc.Text.IndexOf('\r') >= 0)
-					candidates++;
+		var onlyCol = col >= 0 && col < cols;
+		// 打开表：少量候选可用 precise；改列宽交互永远走快速估算
+		var precise = false;
+		if (!onlyCol) {
+			var candidates = 0;
+			for (var r = 0; r < rows && candidates <= AUTOFIT_FULL_CELL_MAX; r++) {
+				if (r >= model.RowHeights.Length || model.RowHeights[r] <= 0) continue;
+				var rowCells0 = model.Cells != null && r < model.Cells.Length ? model.Cells[r] : null;
+				if (rowCells0 == null) continue;
+				for (var c = 0; c < cols && c < rowCells0.Length; c++) {
+					var sc0 = rowCells0[c];
+					if (sc0 == null || sc0.HiddenByMerge || string.IsNullOrEmpty(sc0.Text)) continue;
+					if (sc0.WrapText || sc0.Text.IndexOf('\n') >= 0 || sc0.Text.IndexOf('\r') >= 0)
+						candidates++;
+				}
 			}
+			precise = candidates > 0 && candidates <= AUTOFIT_FULL_CELL_MAX;
 		}
-		var precise = candidates > 0 && candidates <= AUTOFIT_FULL_CELL_MAX;
+
 		var changed = false;
 		for (var r = 0; r < rows; r++) {
 			if (r >= model.RowHeights.Length || model.RowHeights[r] <= 0) continue;
-			var need = 0.0;
 			var rowCells = model.Cells != null && r < model.Cells.Length ? model.Cells[r] : null;
 			if (rowCells == null) continue;
+
+			if (onlyCol) {
+				// 该行是否有换行单元格的列跨度覆盖 col
+				var affected = false;
+				for (var c = 0; c < cols && c < rowCells.Length; c++) {
+					var sc = rowCells[c];
+					if (sc == null || sc.HiddenByMerge || string.IsNullOrEmpty(sc.Text)) continue;
+					var hasNl = sc.Text.IndexOf('\n') >= 0 || sc.Text.IndexOf('\r') >= 0;
+					if (!sc.WrapText && !hasNl) continue;
+					var span = Math.Max(1, sc.ColSpan);
+					var m = model.FindMerge(r, c);
+					if (m != null && m.IsOrigin(r, c)) span = m.C1 - m.C0 + 1;
+					if (col >= c && col < c + span) { affected = true; break; }
+				}
+				if (!affected) continue;
+			}
+
+			var need = 0.0;
 			for (var c = 0; c < cols && c < rowCells.Length; c++) {
 				var sc = rowCells[c];
 				if (sc == null || sc.HiddenByMerge || sc.RowSpan > 1) continue;
@@ -1121,8 +1252,16 @@ sealed class VirtualSheetGrid : UserControl {
 	}
 
 	void paintcore(DrawingContext dc) {
-		var sw = Math.Max(1, surface.Width);
-		var sh = Math.Max(1, surface.Height);
+		// 优先 RenderSize（实际布局），Width 可能尚未参与布局仍为旧值/NaN
+		var sw = surface.RenderSize.Width;
+		var sh = surface.RenderSize.Height;
+		if (double.IsNaN(sw) || sw < 2) sw = surface.Width;
+		if (double.IsNaN(sh) || sh < 2) sh = surface.Height;
+		if (double.IsNaN(sw) || sw < 2) sw = viewW > 2 ? viewW : 800;
+		if (double.IsNaN(sh) || sh < 2) sh = viewH > 2 ? viewH : 600;
+		// 与 pinviewport 对齐，供 cScroll/rScroll 计算
+		if (viewW < 2) viewW = sw;
+		if (viewH < 2) viewH = sh;
 		dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, sw, sh));
 
 		if (cols <= 0) {
@@ -1374,7 +1513,8 @@ sealed class VirtualSheetGrid : UserControl {
 		if (isrowhidden(r)) return;
 		var y = bodylocaly(r);
 		var h = rowH[r];
-		dc.DrawRectangle(brushHdr, null, new Rect(0, y, ROW_HDR_W, h));
+		var bg = isrowinselection(r) ? brushHdrSel : brushHdr;
+		dc.DrawRectangle(bg, null, new Rect(0, y, ROW_HDR_W, h));
 		dc.DrawLine(penGrid, new WpfPoint(0, y + h), new WpfPoint(ROW_HDR_W, y + h));
 		dc.DrawLine(penGrid, new WpfPoint(ROW_HDR_W, y), new WpfPoint(ROW_HDR_W, y + h));
 		var ppd = pixelsPerDip > 0.5 ? pixelsPerDip : 1.0;
@@ -1389,7 +1529,8 @@ sealed class VirtualSheetGrid : UserControl {
 		if (c < 0 || c >= cols || c >= colW.Length || colW[c] <= 0.5) return;
 		var x = bodylocalx(c);
 		var w = colW[c];
-		dc.DrawRectangle(brushHdr, null, new Rect(x, 0, w, HDR_H));
+		var bg = iscolinselection(c) ? brushHdrSel : brushHdr;
+		dc.DrawRectangle(bg, null, new Rect(x, 0, w, HDR_H));
 		dc.DrawLine(penGrid, new WpfPoint(x + w, 0), new WpfPoint(x + w, HDR_H));
 		dc.DrawLine(penGrid, new WpfPoint(x, HDR_H), new WpfPoint(x + w, HDR_H));
 		var name = colname(c);
@@ -1592,6 +1733,56 @@ sealed class VirtualSheetGrid : UserControl {
 
 	// ---------- 交互 ----------
 
+	bool iscolinselection(int c) {
+		if (selR0 < 0 || selC0 < 0 || c < 0) return false;
+		var c0 = Math.Min(selC0, selC1);
+		var c1 = Math.Max(selC0, selC1);
+		return c >= c0 && c <= c1;
+	}
+
+	bool isrowinselection(int r) {
+		if (selR0 < 0 || selC0 < 0 || r < 0) return false;
+		var r0 = Math.Min(selR0, selR1);
+		var r1 = Math.Max(selR0, selR1);
+		return r >= r0 && r <= r1;
+	}
+
+	/// <summary>选中整列（可 Shift 连续多列）。</summary>
+	void selectcolumns(int c0, int c1, bool setAnchor) {
+		if (cols <= 0 || rows <= 0) return;
+		c0 = clampi(c0, 0, cols - 1);
+		c1 = clampi(c1, 0, cols - 1);
+		if (c1 < c0) { var t = c0; c0 = c1; c1 = t; }
+		selR0 = 0;
+		selR1 = rows - 1;
+		selC0 = c0;
+		selC1 = c1;
+		if (setAnchor) {
+			anchorR = 0;
+			anchorC = c0;
+		}
+		activeR = 0;
+		activeC = c1;
+	}
+
+	/// <summary>选中整行（可 Shift 连续多行）。</summary>
+	void selectrows(int r0, int r1, bool setAnchor) {
+		if (cols <= 0 || rows <= 0) return;
+		r0 = clampi(r0, 0, rows - 1);
+		r1 = clampi(r1, 0, rows - 1);
+		if (r1 < r0) { var t = r0; r0 = r1; r1 = t; }
+		selR0 = r0;
+		selR1 = r1;
+		selC0 = 0;
+		selC1 = cols - 1;
+		if (setAnchor) {
+			anchorR = r0;
+			anchorC = 0;
+		}
+		activeR = r1;
+		activeC = 0;
+	}
+
 	void ondown(object sender, MouseButtonEventArgs e) {
 		try { surface.Focus(); } catch { try { Focus(); } catch { /* ignore */ } }
 		if (editR >= 0 && e.ClickCount < 2)
@@ -1604,33 +1795,103 @@ sealed class VirtualSheetGrid : UserControl {
 			e.Handled = true;
 			return;
 		}
-		// 列字母头：拖列宽
-		if (pt.Y >= 0 && pt.Y < HDR_H) {
-			if (tryhitcoledge(pt.X - ROW_HDR_W, out var ci)) {
+		var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+
+		// 左上角：全选
+		if (pt.X >= 0 && pt.X < ROW_HDR_W && pt.Y >= 0 && pt.Y < HDR_H) {
+			if (rows > 0 && cols > 0) {
+				selecting = false;
+				selectingCols = selectingRows = false;
+				selR0 = 0; selC0 = 0;
+				selR1 = rows - 1; selC1 = cols - 1;
+				anchorR = 0; anchorC = 0;
+				activeR = rows - 1; activeC = cols - 1;
+				surface.InvalidateVisual();
+				raiseselection();
+			}
+			e.Handled = true;
+			return;
+		}
+
+		// 列字母头：双击右边线 → 自适应；拖边 → 改宽；点/拖列头 → 选列
+		if (pt.Y >= 0 && pt.Y < HDR_H && pt.X >= ROW_HDR_W) {
+			var bodyX = pt.X - ROW_HDR_W;
+			if (e.ClickCount >= 2) {
+				if (tryhitcoledge(bodyX, out var fitCol, EDGE_HIT_AUTOFIT)) {
+					if (resizingCol || resizingRow) endresize();
+					autofitcol(fitCol);
+					e.Handled = true;
+					return;
+				}
+			} else if (tryhitcoledge(bodyX, out var ci)) {
 				begincolresize(ci, pt.X);
 				surface.CaptureMouse();
 				e.Handled = true;
 				return;
 			}
+			// 点在列头主体：选整列；Shift 连续多列；拖动扩展
+			var c = findcol(bodyX);
+			c = clampi(c, 0, Math.Max(0, cols - 1));
+			selecting = true;
+			selectingCols = true;
+			selectingRows = false;
+			if (shift && anchorC >= 0) {
+				selectcolumns(anchorC, c, setAnchor: false);
+				activeC = c;
+			} else {
+				selectcolumns(c, c, setAnchor: true);
+			}
+			surface.CaptureMouse();
+			surface.InvalidateVisual();
+			raiseselection();
+			e.Handled = true;
+			return;
 		}
-		// 行号拖行高
+
+		// 行号：拖边改高；点/拖行号 → 选行
 		if (pt.X >= 0 && pt.X < ROW_HDR_W && pt.Y >= HDR_H) {
-			if (tryhitrowedge(pt.Y - HDR_H, out var ri)) {
+			var bodyY = pt.Y - HDR_H;
+			if (tryhitrowedge(bodyY, out var ri)) {
 				beginrowresize(ri, pt.Y);
 				surface.CaptureMouse();
 				e.Handled = true;
 				return;
 			}
+			var r = findrow(bodyY);
+			r = clampi(r, 0, Math.Max(0, rows - 1));
+			// 点在隐藏行上时找最近可见行
+			if (isrowhidden(r)) {
+				var g = 0;
+				while (r < rows && isrowhidden(r) && g++ < rows) r++;
+				if (r >= rows) r = rows - 1;
+			}
+			selecting = true;
+			selectingRows = true;
+			selectingCols = false;
+			if (shift && anchorR >= 0) {
+				selectrows(anchorR, r, setAnchor: false);
+				activeR = r;
+			} else {
+				selectrows(r, r, setAnchor: true);
+			}
+			surface.CaptureMouse();
+			surface.InvalidateVisual();
+			raiseselection();
+			e.Handled = true;
+			return;
 		}
-		if (!hittest(pt, out var r, out var c)) return;
-		model.ResolveOrigin(ref r, ref c);
+
+		if (!hittest(pt, out var cr, out var cc)) return;
+		model.ResolveOrigin(ref cr, ref cc);
 		selecting = true;
+		selectingCols = false;
+		selectingRows = false;
 		// 普通点击重置锚点与活动格；Shift+点击可块选
-		var shiftClick = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 && anchorR >= 0 && anchorC >= 0;
-		var m = model.FindMerge(r, c);
+		var shiftClick = shift && anchorR >= 0 && anchorC >= 0;
+		var m = model.FindMerge(cr, cc);
 		if (shiftClick) {
-			activeR = m != null ? m.R0 : r;
-			activeC = m != null ? m.C0 : c;
+			activeR = m != null ? m.R0 : cr;
+			activeC = m != null ? m.C0 : cc;
 			applyselrect(anchorR, anchorC, activeR, activeC);
 		} else {
 			if (m != null) {
@@ -1641,10 +1902,10 @@ sealed class VirtualSheetGrid : UserControl {
 				activeR = m.R0;
 				activeC = m.C0;
 			} else {
-				selR0 = selR1 = r;
-				selC0 = selC1 = c;
-				anchorR = activeR = r;
-				anchorC = activeC = c;
+				selR0 = selR1 = cr;
+				selC0 = selC1 = cc;
+				anchorR = activeR = cr;
+				anchorC = activeC = cc;
 			}
 			expandselformerges();
 		}
@@ -1675,23 +1936,61 @@ sealed class VirtualSheetGrid : UserControl {
 				Cursor = Cursors.Arrow;
 		}
 		if (!selecting || e.LeftButton != MouseButtonState.Pressed) return;
-		if (!hittest(pt, out var r, out var c)) {
-			r = findrow(Math.Max(0, pt.Y - HDR_H));
-			c = findcol(Math.Max(0, pt.X - ROW_HDR_W));
-			r = clampi(r, 0, Math.Max(0, rows - 1));
+
+		// 拖选多列
+		if (selectingCols) {
+			var c = findcol(Math.Max(0, pt.X - ROW_HDR_W));
 			c = clampi(c, 0, Math.Max(0, cols - 1));
+			var col0 = Math.Min(anchorC, c);
+			var col1 = Math.Max(anchorC, c);
+			if (col0 == Math.Min(selC0, selC1) && col1 == Math.Max(selC0, selC1)
+				&& selR0 == 0 && selR1 == rows - 1) {
+				e.Handled = true;
+				return;
+			}
+			selectcolumns(anchorC, c, setAnchor: false);
+			activeC = c;
+			surface.InvalidateVisual();
+			raiseselection();
+			e.Handled = true;
+			return;
 		}
-		model.ResolveOrigin(ref r, ref c);
-		var mEnd = model.FindMerge(r, c);
+		// 拖选多行
+		if (selectingRows) {
+			var r = findrow(Math.Max(0, pt.Y - HDR_H));
+			r = clampi(r, 0, Math.Max(0, rows - 1));
+			var row0 = Math.Min(anchorR, r);
+			var row1 = Math.Max(anchorR, r);
+			if (row0 == Math.Min(selR0, selR1) && row1 == Math.Max(selR0, selR1)
+				&& selC0 == 0 && selC1 == cols - 1) {
+				e.Handled = true;
+				return;
+			}
+			selectrows(anchorR, r, setAnchor: false);
+			activeR = r;
+			surface.InvalidateVisual();
+			raiseselection();
+			e.Handled = true;
+			return;
+		}
+
+		if (!hittest(pt, out var cellR, out var cellC)) {
+			cellR = findrow(Math.Max(0, pt.Y - HDR_H));
+			cellC = findcol(Math.Max(0, pt.X - ROW_HDR_W));
+			cellR = clampi(cellR, 0, Math.Max(0, rows - 1));
+			cellC = clampi(cellC, 0, Math.Max(0, cols - 1));
+		}
+		model.ResolveOrigin(ref cellR, ref cellC);
+		var mEnd = model.FindMerge(cellR, cellC);
 		var mAnc = model.FindMerge(anchorR, anchorC);
 		var ar0 = mAnc != null ? mAnc.R0 : anchorR;
 		var ac0 = mAnc != null ? mAnc.C0 : anchorC;
 		var ar1 = mAnc != null ? mAnc.R1 : anchorR;
 		var ac1 = mAnc != null ? mAnc.C1 : anchorC;
-		var er0 = mEnd != null ? mEnd.R0 : r;
-		var ec0 = mEnd != null ? mEnd.C0 : c;
-		var er1 = mEnd != null ? mEnd.R1 : r;
-		var ec1 = mEnd != null ? mEnd.C1 : c;
+		var er0 = mEnd != null ? mEnd.R0 : cellR;
+		var ec0 = mEnd != null ? mEnd.C0 : cellC;
+		var er1 = mEnd != null ? mEnd.R1 : cellR;
+		var ec1 = mEnd != null ? mEnd.C1 : cellC;
 		var nr0 = Math.Min(ar0, er0);
 		var nc0 = Math.Min(ac0, ec0);
 		var nr1 = Math.Max(ar1, er1);
@@ -1706,8 +2005,8 @@ sealed class VirtualSheetGrid : UserControl {
 		selR1 = nr1;
 		selC1 = nc1;
 		// 拖选时活动角跟随鼠标（锚点仍为按下处）
-		activeR = mEnd != null ? mEnd.R0 : r;
-		activeC = mEnd != null ? mEnd.C0 : c;
+		activeR = mEnd != null ? mEnd.R0 : cellR;
+		activeC = mEnd != null ? mEnd.C0 : cellC;
 		expandselformerges();
 		surface.InvalidateVisual();
 		raiseselection();
@@ -1723,6 +2022,8 @@ sealed class VirtualSheetGrid : UserControl {
 		}
 		if (!selecting) return;
 		selecting = false;
+		selectingCols = false;
+		selectingRows = false;
 		try { surface.ReleaseMouseCapture(); } catch { /* ignore */ }
 		raiseselection();
 		e.Handled = true;
@@ -2028,15 +2329,20 @@ sealed class VirtualSheetGrid : UserControl {
 		return true;
 	}
 
-	bool tryhitcoledge(double x, out int col) {
+	bool tryhitcoledge(double x, out int col) => tryhitcoledge(x, out col, EDGE_HIT);
+
+	/// <param name="hitTol">命中半宽（当前 zoom 下的 body 坐标，与 colX 同系）。</param>
+	bool tryhitcoledge(double x, out int col, double hitTol) {
 		col = -1;
 		if (cols <= 0 || colX == null || colX.Length < 2) return false;
+		if (hitTol < 1) hitTol = EDGE_HIT;
 		// 只查命中列附近边界，避免大表 O(n) 全扫
 		var c = findcol(x);
-		var best = EDGE_HIT + 1;
+		var best = hitTol + 1;
 		for (var i = Math.Max(0, c - 1); i <= Math.Min(cols - 1, c + 1); i++) {
+			// 命中第 i 列的右边界 → 调整/自适应第 i 列
 			var d = Math.Abs(x - colX[i + 1]);
-			if (d <= EDGE_HIT && d <= best) { best = d; col = i; }
+			if (d <= hitTol && d <= best) { best = d; col = i; }
 		}
 		return col >= 0;
 	}
@@ -2052,6 +2358,98 @@ sealed class VirtualSheetGrid : UserControl {
 			if (d <= EDGE_HIT && d <= best) { best = d; row = i; }
 		}
 		return row >= 0;
+	}
+
+	/// <summary>
+	/// 双击列右边界：按中/英文字符宽简单估算内容最大宽度并设列宽（zoom=1 base）。
+	/// 中文（全角）≈ 1.05×字号 DIP；英文/半角 ≈ 0.55×字号。
+	/// </summary>
+	void autofitcol(int col) {
+		if (col < 0 || col >= cols || model == null) return;
+		ensurecolwidths();
+		const double padX = 10; // 左右内边距（base DIP）
+		var maxW = (double)RESIZE_MIN_COL;
+		// 列头字母本身
+		maxW = Math.Max(maxW, estimatetextwidth(colname(col), 11.0 * 96.0 / 72.0, bold: false) + padX);
+
+		var limit = Math.Min(rows, AUTOFIT_COL_MAX_ROWS);
+		for (var r = 0; r < limit; r++) {
+			if (isrowhidden(r)) continue;
+			var sc = model.CellAt(r, col);
+			if (sc == null || sc.HiddenByMerge) continue;
+			// 跨多列合并不单列自适应（避免被整段拉爆）
+			if (sc.ColSpan > 1) continue;
+			var m = model.FindMerge(r, col);
+			if (m != null && (m.C1 > m.C0 || !m.IsOrigin(r, col))) continue;
+			var text = sc.Text;
+			if (string.IsNullOrEmpty(text)) continue;
+			// 与 paint 一致：磅 → DIP；此处按 zoom=1 算 base 宽
+			var fs = sc.FontSizePt > 0 ? sc.FontSizePt * 96.0 / 72.0 : 11.0 * 96.0 / 72.0;
+			if (fs < 8) fs = 8;
+			var w = estimatetextwidth(text, fs, sc.Bold) + padX;
+			// 筛选表头行：右侧留给下拉按钮
+			if (r == filterHdrRow && canfiltercol(col)) w += 18;
+			if (w > maxW) maxW = w;
+		}
+
+		// 不人为封顶列宽；仅保证下限
+		var baseW = Math.Max(RESIZE_MIN_COL, maxW);
+		if (baseW > RESIZE_MAX_COL) baseW = RESIZE_MAX_COL; // 仅防 double 爆炸
+		model.ColWidths[col] = baseW;
+		patchcolmetrics(col, baseW);
+		// 只重算依赖该列宽度的换行行，避免全表 FormattedText
+		autofitrowheightsforcol(col);
+		applytablesize();
+		surface.InvalidateVisual();
+		DocLog.Info($"autofitcol c={col} baseW={baseW:F1} rows={limit}");
+	}
+
+	/// <summary>按中/英文字宽估算文本显示宽（多行取最长行）。fs 为 DIP 字号。</summary>
+	static double estimatetextwidth(string text, double fs, bool bold) {
+		if (string.IsNullOrEmpty(text) || fs < 1) return 0;
+		// 英文约 0.55em，中文/全角约 1.05em（略放大避免裁切）
+		var enW = fs * 0.55;
+		var zhW = fs * 1.05;
+		if (bold) {
+			enW *= 1.08;
+			zhW *= 1.05;
+		}
+		double best = 0, line = 0;
+		for (var i = 0; i < text.Length; i++) {
+			var ch = text[i];
+			if (ch == '\r') continue;
+			if (ch == '\n') {
+				if (line > best) best = line;
+				line = 0;
+				continue;
+			}
+			if (ch == '\t') {
+				line += enW * 4;
+				continue;
+			}
+			line += iswidechar(ch) ? zhW : enW;
+		}
+		if (line > best) best = line;
+		return best;
+	}
+
+	/// <summary>中日韩/全角等宽字符（按一字宽计）。</summary>
+	static bool iswidechar(char c) {
+		if (c < 0x1100) return false;
+		// Hangul Jamo
+		if (c <= 0x115F) return true;
+		// CJK 部首/符号/假名/汉字
+		if (c >= 0x2E80 && c <= 0xA4CF) return true;
+		// Hangul 音节
+		if (c >= 0xAC00 && c <= 0xD7A3) return true;
+		// CJK 兼容
+		if (c >= 0xF900 && c <= 0xFAFF) return true;
+		// 竖排标点 / 全角
+		if (c >= 0xFE10 && c <= 0xFE19) return true;
+		if (c >= 0xFE30 && c <= 0xFE6F) return true;
+		if (c >= 0xFF00 && c <= 0xFF60) return true;
+		if (c >= 0xFFE0 && c <= 0xFFE6) return true;
+		return false;
 	}
 
 	void begincolresize(int col, double mouseX) {
@@ -2082,10 +2480,14 @@ sealed class VirtualSheetGrid : UserControl {
 		if (!resizingCol || resizeIdx < 0 || resizeIdx >= cols) return;
 		ensurecolwidths();
 		var z = zoom > 0.01 ? zoom : 1.0;
-		var baseW = clamp(resizeStartBase + (mouseX - resizeStartMouse) / z, RESIZE_MIN_COL, RESIZE_MAX_COL);
+		// 列宽不设业务上限（仅下限 + 极大值防溢出）
+		var baseW = resizeStartBase + (mouseX - resizeStartMouse) / z;
+		if (baseW < RESIZE_MIN_COL) baseW = RESIZE_MIN_COL;
+		if (baseW > RESIZE_MAX_COL) baseW = RESIZE_MAX_COL;
 		if (Math.Abs(model.ColWidths[resizeIdx] - baseW) < 0.01) return;
 		model.ColWidths[resizeIdx] = baseW;
-		rebuildmetrics();
+		// 增量改 colX，勿 rebuild 全表行数组（末列拖动时 Extent 每帧变，旧路径会卡数秒）
+		patchcolmetrics(resizeIdx, baseW);
 		applytablesize();
 		surface.InvalidateVisual();
 	}
@@ -2097,19 +2499,21 @@ sealed class VirtualSheetGrid : UserControl {
 		var baseH = clamp(resizeStartBase + (mouseY - resizeStartMouse) / z, RESIZE_MIN_ROW, RESIZE_MAX_ROW);
 		if (Math.Abs(model.RowHeights[resizeIdx] - baseH) < 0.01) return;
 		model.RowHeights[resizeIdx] = baseH;
-		rebuildmetrics();
+		patchrowmetrics(resizeIdx, baseH);
 		applytablesize();
 		surface.InvalidateVisual();
 	}
 
 	void endresize() {
 		var wasCol = resizingCol;
+		var idx = resizeIdx;
 		resizingCol = false;
 		resizingRow = false;
 		resizeIdx = -1;
 		Cursor = Cursors.Arrow;
-		if (wasCol) {
-			autofitrowheights();
+		if (wasCol && idx >= 0) {
+			// 仅重算依赖该列的换行行；全表 precise 测量会卡几秒
+			autofitrowheightsforcol(idx);
 			applytablesize();
 		}
 		surface.InvalidateVisual();

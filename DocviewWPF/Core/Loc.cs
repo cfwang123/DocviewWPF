@@ -91,6 +91,7 @@ static class Loc {
 		a("print", "打印(_P)...", "Print(_P)...", "印刷(_P)...", "인쇄(_P)...");
 		a("copy_path", "复制文件路径", "Copy file path", "パスをコピー", "경로 복사");
 		a("show_in_explorer", "在资源管理器中显示", "Show in Explorer", "エクスプローラーで表示", "탐색기에서 표시");
+		a("open_with_system", "用系统应用打开", "Open with system app", "システムアプリで開く", "시스템 앱으로 열기");
 		a("close", "关闭(_C)", "Close(_C)", "閉じる(_C)", "닫기(_C)");
 		a("close_all", "关闭全部", "Close all", "すべて閉じる", "모두 닫기");
 		a("exit", "退出(_X)", "Exit(_X)", "終了(_X)", "종료(_X)");
@@ -120,6 +121,7 @@ static class Loc {
 		// —— 工具栏 ——
 		a("tip_open", "打开 (Ctrl+O)", "Open (Ctrl+O)", "開く (Ctrl+O)", "열기 (Ctrl+O)");
 		a("tip_print", "打印 (Ctrl+P)", "Print (Ctrl+P)", "印刷 (Ctrl+P)", "인쇄 (Ctrl+P)");
+		a("tip_side", "目录 (F4)", "Outline (F4)", "目次 (F4)", "목차 (F4)");
 		a("page_label", "页码:", "Page:", "ページ:", "페이지:");
 		a("tip_page", "页码 (Ctrl+G)", "Page (Ctrl+G)", "ページ (Ctrl+G)", "페이지 (Ctrl+G)");
 		a("tip_prev", "上一页 (PgUp)", "Previous page (PgUp)", "前のページ (PgUp)", "이전 페이지 (PgUp)");
@@ -143,6 +145,27 @@ static class Loc {
 		a("tip_pdf_edit", "打开 PDF 专业编辑窗口", "Open PDF Pro Editor", "PDF プロ編集を開く", "PDF 전문 편집 열기");
 		a("tip_pdf_edit_short", "编辑 PDF", "Edit PDF", "PDF を編集", "PDF 편집");
 		a("tip_pdf_save", "保存 PDF (Ctrl+S)", "Save PDF (Ctrl+S)", "PDF を保存 (Ctrl+S)", "PDF 저장 (Ctrl+S)");
+		a("tip_annot", "标注模式", "Annotation mode", "注釈モード", "주석 모드");
+		a("tip_annot_hand", "手型（平移）", "Hand (pan)", "手のひら（パン）", "손 도구(이동)");
+		a("tip_annot_sel", "框选（选择/移动/调整）", "Select / move / resize", "選択/移動/サイズ", "선택/이동/크기");
+		a("tip_annot_pen", "钢笔（可连续画）", "Pen (continuous)", "ペン（連続）", "펜(연속)");
+		a("tip_annot_hl", "荧光笔（可连续画）", "Highlighter (continuous)", "蛍光ペン（連続）", "형광펜(연속)");
+		a("tip_annot_eraser", "橡皮（擦钢笔/荧光笔）", "Eraser (ink / highlight)", "消しゴム", "지우개");
+		a("tip_annot_eraser_mode", "橡皮模式：点擦笔迹 / 整笔删除", "Eraser mode: point / whole stroke", "消しゴムモード", "지우개 모드");
+		a("tip_annot_text", "文字（可调宽度/字体/颜色，高度自适应）", "Text (width/font/color; auto height)", "テキスト", "텍스트");
+		a("tip_annot_note", "注释（小气泡，点击展开）", "Note (bubble; click to expand)", "メモ（クリックで展開）", "메모(클릭하여 펼침)");
+		a("tip_annot_rect", "矩形", "Rectangle", "矩形", "사각형");
+		a("tip_annot_ell", "椭圆", "Ellipse", "楕円", "타원");
+		a("tip_annot_line", "直线", "Line", "直線", "직선");
+		a("tip_annot_arrow", "箭头", "Arrow", "矢印", "화살표");
+		a("tip_annot_color", "颜色", "Color", "色", "색");
+		a("tip_annot_group", "成组 (Ctrl+G)", "Group (Ctrl+G)", "グループ化 (Ctrl+G)", "그룹화 (Ctrl+G)");
+		a("tip_annot_ungroup", "解组 (Ctrl+Shift+G)", "Ungroup (Ctrl+Shift+G)", "グループ解除 (Ctrl+Shift+G)", "그룹 해제 (Ctrl+Shift+G)");
+		a("tip_annot_copy", "复制 (Ctrl+D)", "Duplicate (Ctrl+D)", "複製 (Ctrl+D)", "복제 (Ctrl+D)");
+		a("tip_annot_del", "删除 (Delete)", "Delete (Delete)", "削除 (Delete)", "삭제 (Delete)");
+		a("tip_annot_save", "保存标注 JSON", "Save annotation JSON", "注釈 JSON を保存", "주석 JSON 저장");
+		a("tip_annot_save_pdf", "另存为 PDF（标注烧入页面）", "Save as PDF (burn annotations)", "注釈を埋め込んで PDF 保存", "주석을 넣어 PDF로 저장");
+		a("annot_tip", "JSON 旁路 · 可另存烧入 PDF", "JSON sidecar · can burn into PDF", "JSON 併用 · PDF 埋め込み可", "JSON 병행 · PDF에 구울 수 있음");
 
 		// —— PDF 嵌入编辑栏 ——
 		a("tip_pdf_sel", "选择/移动", "Select / move", "選択/移動", "선택/이동");
@@ -171,7 +194,7 @@ static class Loc {
 
 		// —— 侧栏 / 状态 ——
 		a("outline", "目录", "Outline", "目次", "목차");
-		a("filter_outline", "筛选目录…", "Filter outline…", "目次を絞り込み…", "목차 필터…");
+		a("filter_outline", "筛选章节…", "Filter chapters…", "見出しを絞り込み…", "장 필터…");
 		a("ready", "就绪", "Ready", "準備完了", "준비됨");
 		a("loading", "加载中… {0}", "Loading… {0}", "読み込み中… {0}", "로드 중… {0}");
 		a("open_failed", "打开失败", "Open failed", "開けませんでした", "열기 실패");
@@ -182,10 +205,10 @@ static class Loc {
 		a("clear_recent", "清除全部最近文件", "Clear recent files", "最近のファイルをすべて消去", "최근 파일 모두 지우기");
 		a("no_file", "当前没有打开的文件。", "No file is open.", "ファイルが開かれていません。", "열린 파일이 없습니다.");
 		a("no_print", "没有可打印的文档。", "Nothing to print.", "印刷できる文書がありません。", "인쇄할 문서가 없습니다.");
-		a("unsupported_type", "不支持的文件类型:\n{0}\n\n支持: .pdf .docx .xlsx",
-			"Unsupported file type:\n{0}\n\nSupported: .pdf .docx .xlsx",
-			"未対応の種類:\n{0}\n\n対応: .pdf .docx .xlsx",
-			"지원하지 않는 형식:\n{0}\n\n지원: .pdf .docx .xlsx");
+		a("unsupported_type", "不支持的文件类型:\n{0}\n\n支持: .pdf .docx .xlsx .txt .md / 代码 / 图片",
+			"Unsupported file type:\n{0}\n\nSupported: .pdf .docx .xlsx .txt .md / code / images",
+			"未対応の種類:\n{0}\n\n対応: .pdf .docx .xlsx .txt .md / コード / 画像",
+			"지원하지 않는 형식:\n{0}\n\n지원: .pdf .docx .xlsx .txt .md / 코드 / 이미지");
 		a("file_missing", "文件不存在:\n{0}", "File not found:\n{0}", "ファイルがありません:\n{0}", "파일이 없습니다:\n{0}");
 		a("file_missing_removed", "文件不存在，已从最近列表移除:\n{0}",
 			"File missing; removed from recent:\n{0}",
@@ -195,6 +218,7 @@ static class Loc {
 		a("print_failed", "打印失败: {0}", "Print failed: {0}", "印刷に失敗: {0}", "인쇄 실패: {0}");
 		a("copy_failed", "复制失败: {0}", "Copy failed: {0}", "コピーに失敗: {0}", "복사 실패: {0}");
 		a("explorer_failed", "无法打开资源管理器: {0}", "Cannot open Explorer: {0}", "エクスプローラーを開けません: {0}", "탐색기를 열 수 없음: {0}");
+		a("open_with_system_failed", "无法用系统应用打开: {0}", "Cannot open with system app: {0}", "システムアプリで開けません: {0}", "시스템 앱으로 열 수 없음: {0}");
 		a("tab_tip", "{0}\n拖动可排序；拖出窗口外可拆分为独立窗口",
 			"{0}\nDrag to reorder; drag out to tear off a window",
 			"{0}\nドラッグで並べ替え／外へ出して分離",
@@ -217,10 +241,26 @@ static class Loc {
 			"Unsaved spreadsheet changes. Save?",
 			"未保存の表の変更があります。保存しますか？",
 			"저장되지 않은 표 변경이 있습니다. 저장할까요?");
+		a("confirm_save_title", "未保存的修改", "Unsaved changes", "未保存の変更", "저장되지 않은 변경");
+		a("confirm_save_file",
+			"文件有未保存的修改：\n{0}\n\n{1}\n\n是否保存？\n（是=保存，否=不保存，取消=不关闭）",
+			"Unsaved changes in:\n{0}\n\n{1}\n\nSave?\n(Yes=Save, No=Discard, Cancel=Stay)",
+			"未保存の変更があります：\n{0}\n\n{1}\n\n保存しますか？\n（はい=保存、いいえ=破棄、キャンセル=閉じない）",
+			"저장되지 않은 변경:\n{0}\n\n{1}\n\n저장할까요?\n(예=저장, 아니요=버림, 취소=닫지 않음)");
 		a("msg_edit_text_first", "请先在阅读模式下拖选要修改的文字，再进入编辑并点此按钮。\n也可直接用「添加文字」在页面上点选位置。",
 			"Select text in read mode first, then enter edit and click this button.\nOr use Add Text and click the page.",
 			"先に閲覧モードで文字を選択してから編集してください。\nまたは「テキスト追加」でページをクリック。",
 			"읽기 모드에서 먼저 텍스트를 선택한 뒤 편집하세요.\n또는 「텍스트 추가」로 페이지를 클릭.");
+		a("external_changed_title", "外部文件已更改", "File changed externally", "外部でファイルが変更されました", "외부에서 파일이 변경됨");
+		a("external_changed_dirty",
+			"文件已被外部程序修改：\n{0}\n\n本地有未保存的修改。是否放弃本地修改并重新加载外部文件？",
+			"The file was modified externally:\n{0}\n\nYou have unsaved local changes. Discard them and reload the file?",
+			"ファイルが外部で変更されました：\n{0}\n\n未保存の変更があります。破棄して外部ファイルを再読み込みしますか？",
+			"파일이 외부에서 수정되었습니다:\n{0}\n\n저장되지 않은 로컬 변경이 있습니다. 버리고 외부 파일을 다시 불러올까요?");
+		a("external_reloaded", "已从磁盘重新加载: {0}", "Reloaded from disk: {0}", "ディスクから再読み込み: {0}", "디스크에서 다시 로드: {0}");
+		a("reload_failed", "重新加载失败", "Reload failed", "再読み込みに失敗", "다시 로드 실패");
+		a("code_show_all", "显示全部", "Show all", "すべて表示", "전체 표시");
+		a("code_collapse", "收起", "Collapse", "折りたたむ", "접기");
 
 		// —— 设置 ——
 		a("settings_title", "系统参数", "Settings", "設定", "설정");
@@ -238,6 +278,17 @@ static class Loc {
 			"メニュー・ツールバー・目次など（既定 12）。本文の文字サイズは変わりません。",
 			"메뉴·도구 모음·목차 등(기본 12). 문서 본문 크기는 변경하지 않습니다.");
 		a("font_size_px", "字号（px）", "Size (px)", "サイズ (px)", "크기 (px)");
+		a("md_tab_section", "Markdown Tab", "Markdown Tab", "Markdown Tab", "Markdown Tab");
+		a("md_tab_hint", "Tab 显示宽度（字符）。打开时将围栏外 Tab 展成空格；改宽度时按层级重算行首缩进。编辑 Tab 键插入空格。默认 3。",
+			"Tab width (chars). Tabs outside fences expand on open; changing width retargets leading indent. Tab key inserts spaces. Default 3.",
+			"Tab 表示幅（文字数）。フェンス外 Tab は開く時に展開；幅変更で行頭インデントを再計算。Tab は空白挿入。既定 3。",
+			"Tab 너비(문자). 펜스 밖 Tab은 열 때 전개; 너비 변경 시 행 머리 들여쓰기 재계산. Tab은 공백 삽입. 기본 3.");
+		a("md_tab_size", "宽度（字符）", "Width (chars)", "幅（文字）", "너비(문자)");
+		a("md_heading_autonum", "标题自动编号", "Auto-number headings", "見出しの自動番号", "제목 자동 번호");
+		a("md_heading_autonum_hint", "启用后在预览与目录中为标题加 1 / 1.1 / 1.1.1 编号（不修改源文件）。默认开启。",
+			"When on, preview and outline show 1 / 1.1 / 1.1.1 before headings (source unchanged). On by default.",
+			"オン時、プレビューと目次に 1 / 1.1 / 1.1.1 を付与（ソースは変更しません）。既定オン。",
+			"켜면 미리보기·목차에 1 / 1.1 / 1.1.1 표시(원본 파일 미변경). 기본 켜짐.");
 		a("lang_section", "界面语言", "UI language", "表示言語", "표시 언어");
 		a("lang_hint", "切换后立即生效并保存。支持中文、English、日本語、한국어。",
 			"Applies and saves immediately. Supports Chinese, English, Japanese, Korean.",

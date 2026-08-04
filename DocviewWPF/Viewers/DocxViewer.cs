@@ -13,6 +13,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using WpfPoint = System.Windows.Point;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using A = DocumentFormat.OpenXml.Drawing;
 using W = DocumentFormat.OpenXml.Wordprocessing;
@@ -60,6 +61,8 @@ sealed class DocxViewer : IDocViewer {
 	Dictionary<string, string> styleNames = new();
 	/// <summary>样式段落属性（含继承链合并前的单层定义）。</summary>
 	Dictionary<string, StylePPr> stylePPrs = new(StringComparer.OrdinalIgnoreCase);
+	/// <summary>样式默认字符属性（Title 字号等）。</summary>
+	Dictionary<string, StyleRPr> styleRPrs = new(StringComparer.OrdinalIgnoreCase);
 	Dictionary<string, string> styleBasedOn = new(StringComparer.OrdinalIgnoreCase);
 	MainDocumentPart mainPart;
 	bool pendingPageBreak;
@@ -126,6 +129,17 @@ sealed class DocxViewer : IDocViewer {
 		public double? Before, After, Line;
 		public bool LineAuto = true;
 		public double? Left, Right, First, Hanging;
+		/// <summary>样式对齐（Title 等常只在样式上写 jc，段上无 jc）。</summary>
+		public TextAlignment? Align;
+	}
+
+	/// <summary>styles.xml 中样式默认 run 属性（Title 字号/加粗常在 style rPr，run 上无 sz）。</summary>
+	sealed class StyleRPr {
+		/// <summary>字号（磅，已由 half-point/2 换算）。</summary>
+		public double? FontSizePt;
+		public bool? Bold;
+		public bool? Italic;
+		public string FontName;
 	}
 
 	public FrameworkElement View => root;
@@ -149,6 +163,8 @@ sealed class DocxViewer : IDocViewer {
 	double pagepitch => pageH + PAGE_GAP;
 
 	public event Action StatusChanged;
+	/// <summary>滚动定位章节时：理想大纲 1-based 页码（主窗章节列表镜像用）。</summary>
+	public event Action<int> OutlineHighlightChanged;
 
 	public DocxViewer() {
 		tree = new TreeView {
@@ -284,6 +300,8 @@ sealed class DocxViewer : IDocViewer {
 		flow = newflow();
 		// 构造时侧栏先隐藏，Load 后按是否有 TOC 决定
 		setside(false);
+		MainWindow.WireFileDropTarget(root);
+		MainWindow.WireFileDropTarget(pageScroll);
 	}
 
 	public void Load(string path) => Load(path, null);
@@ -986,8 +1004,38 @@ sealed class DocxViewer : IDocViewer {
 	}
 
 	public bool HasOutline => hasOutline;
-	public bool SidePanelVisible => sideVisible;
-	public void SetSidePanelVisible(bool show) => setside(show);
+
+	/// <summary>主窗侧栏 TOC：标题 / 层级 / 1-based 页码。</summary>
+	public List<(string Title, int Level, int Page1)> GetOutlineSnapshot() {
+		var list = new List<(string, int, int)>();
+		try {
+			foreach (var t in tocEntries) {
+				if (t == null) continue;
+				list.Add((t.Title ?? "", t.Level, t.Page1));
+			}
+		} catch { /* ignore */ }
+		return list;
+	}
+
+	/// <summary>
+	/// 主窗章节列表高亮：当前页对应的大纲 1-based 页码；无则 -1。
+	/// </summary>
+	public int GetActiveOutlinePage1() {
+		if (!hasOutline || tocEntries.Count == 0) return -1;
+		try {
+			var peek = CurrentPage;
+			TocEntry best = null;
+			foreach (var te in tocEntries) {
+				if (te == null || te.Page1 <= 0 || te.Page1 > peek) continue;
+				best = te;
+			}
+			return best != null ? best.Page1 : -1;
+		} catch {
+			return -1;
+		}
+	}
+	public bool SidePanelVisible => false;
+	public void SetSidePanelVisible(bool show) => setside(false);
 
 	public FindResult Find(string text, bool forward, bool ignoreCase, bool restart = false, bool fromView = false) {
 		if (string.IsNullOrEmpty(text) || pageBoxes.Count == 0)
@@ -1224,10 +1272,11 @@ sealed class DocxViewer : IDocViewer {
 		mainPart = null;
 	}
 
+	/// <summary>文档内嵌目录侧栏已废弃（改用主窗「章节列表」），始终隐藏。</summary>
 	void setside(bool show) {
-		sideVisible = show;
-		colside.Width = show ? new GridLength(SIDE_W) : new GridLength(0);
-		pside.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+		sideVisible = false;
+		colside.Width = new GridLength(0);
+		pside.Visibility = Visibility.Collapsed;
 		StatusChanged?.Invoke();
 	}
 
@@ -1250,7 +1299,7 @@ sealed class DocxViewer : IDocViewer {
 			}
 			hasOutline = true;
 			if (eoutline != null) eoutline.Visibility = Visibility.Visible;
-			setside(true);
+			setside(false);
 			rebuildtocui();
 			synctoc(force: true);
 		} catch (Exception ex) {
@@ -1408,10 +1457,16 @@ sealed class DocxViewer : IDocViewer {
 		// 文档序：后出现的覆盖先前的
 		TocEntry best = null;
 		foreach (var te in tocEntries) {
-			if (te.Page1 <= 0 || te.Page1 > page || te.Item == null) continue;
+			if (te == null || te.Page1 <= 0 || te.Page1 > page) continue;
 			best = te;
 		}
-		if (best?.Item == null) return;
+		if (best == null) return;
+		// 主窗章节列表镜像
+		try { OutlineHighlightChanged?.Invoke(best.Page1); } catch { /* ignore */ }
+		if (best.Item == null) {
+			lastTocPage = page;
+			return;
+		}
 		if (pendingExpandOutline) {
 			syncTree = true;
 			try { OutlineUi.ExpandAncestors(best.Item); }
@@ -1439,6 +1494,7 @@ sealed class DocxViewer : IDocViewer {
 	void loadstyles(MainDocumentPart main) {
 		styleNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		stylePPrs = new Dictionary<string, StylePPr>(StringComparer.OrdinalIgnoreCase);
+		styleRPrs = new Dictionary<string, StyleRPr>(StringComparer.OrdinalIgnoreCase);
 		styleBasedOn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		var styles = main?.StyleDefinitionsPart?.Styles;
 		if (styles == null) return;
@@ -1454,7 +1510,43 @@ sealed class DocxViewer : IDocViewer {
 			var sp = parsestyleppr(st.StyleParagraphProperties);
 			if (sp != null)
 				stylePPrs[id] = sp;
+			// 样式默认字符格式（Title 的 sz=32 / b 等）
+			var sr = parserpr(st.StyleRunProperties);
+			if (sr != null)
+				styleRPrs[id] = sr;
 		}
+	}
+
+	/// <summary>解析 w:rPr（样式或 run）；字号 half-point → 磅。</summary>
+	static StyleRPr parserpr(OpenXmlElement rPr) {
+		if (rPr == null) return null;
+		var sr = new StyleRPr();
+		var any = false;
+		// Bold / Italic：OpenXml 元素存在即开（Val 缺省=true）
+		var b = rPr.GetFirstChild<W.Bold>();
+		if (b != null) {
+			sr.Bold = b.Val == null || b.Val.Value;
+			any = true;
+		}
+		var i = rPr.GetFirstChild<W.Italic>();
+		if (i != null) {
+			sr.Italic = i.Val == null || i.Val.Value;
+			any = true;
+		}
+		var sz = rPr.GetFirstChild<W.FontSize>();
+		if (sz?.Val?.Value != null && double.TryParse(sz.Val.Value, out var hp) && hp > 0) {
+			sr.FontSizePt = hp / 2.0;
+			any = true;
+		}
+		var fonts = rPr.GetFirstChild<W.RunFonts>();
+		if (fonts != null) {
+			var name = fonts.EastAsia?.Value ?? fonts.Ascii?.Value ?? fonts.HighAnsi?.Value;
+			if (!string.IsNullOrEmpty(name)) {
+				sr.FontName = name;
+				any = true;
+			}
+		}
+		return any ? sr : null;
 	}
 
 	static StylePPr parsestyleppr(W.StyleParagraphProperties pPr) {
@@ -1491,7 +1583,20 @@ sealed class DocxViewer : IDocViewer {
 			if (ind.FirstLine != null && int.TryParse(ind.FirstLine.Value, out var fi)) { sp.First = fi * TWIP2DIP; any = true; }
 			if (ind.Hanging != null && int.TryParse(ind.Hanging.Value, out var hi)) { sp.Hanging = hi * TWIP2DIP; any = true; }
 		}
+		// 对齐：Title 等样式常只在 style pPr 写 jc，段落上无 jc
+		if (pPr.Justification?.Val != null) {
+			sp.Align = mapjustify(pPr.Justification.Val.Value);
+			any = true;
+		}
 		return any ? sp : null;
+	}
+
+	static TextAlignment mapjustify(W.JustificationValues v) {
+		if (v == W.JustificationValues.Center) return TextAlignment.Center;
+		if (v == W.JustificationValues.Right) return TextAlignment.Right;
+		if (v == W.JustificationValues.Both) return TextAlignment.Justify;
+		// left / start / distribute 等按左
+		return TextAlignment.Left;
 	}
 
 	/// <summary>合并样式继承链上的段落属性（祖先 → 自身）。</summary>
@@ -1517,6 +1622,29 @@ sealed class DocxViewer : IDocViewer {
 			if (layer.Right != null) acc.Right = layer.Right;
 			if (layer.First != null) acc.First = layer.First;
 			if (layer.Hanging != null) acc.Hanging = layer.Hanging;
+			if (layer.Align != null) acc.Align = layer.Align;
+		}
+		return acc;
+	}
+
+	/// <summary>合并样式继承链上的默认 run 属性（祖先 → 自身）。</summary>
+	StyleRPr resolvestylerpr(string styleId) {
+		if (string.IsNullOrEmpty(styleId)) return null;
+		var chain = new List<string>();
+		var guard = 0;
+		for (var id = styleId; !string.IsNullOrEmpty(id) && guard++ < 24; ) {
+			chain.Add(id);
+			if (!styleBasedOn.TryGetValue(id, out var parent)) break;
+			id = parent;
+		}
+		StyleRPr acc = null;
+		for (var i = chain.Count - 1; i >= 0; i--) {
+			if (!styleRPrs.TryGetValue(chain[i], out var layer)) continue;
+			if (acc == null) acc = new StyleRPr();
+			if (layer.FontSizePt != null) acc.FontSizePt = layer.FontSizePt;
+			if (layer.Bold != null) acc.Bold = layer.Bold;
+			if (layer.Italic != null) acc.Italic = layer.Italic;
+			if (!string.IsNullOrEmpty(layer.FontName)) acc.FontName = layer.FontName;
 		}
 		return acc;
 	}
@@ -1802,6 +1930,14 @@ sealed class DocxViewer : IDocViewer {
 		return false;
 	}
 
+	/// <summary>段落对齐：样式 → 段属性覆盖。</summary>
+	static void applyalignment(Paragraph para, StylePPr styleP, W.ParagraphProperties pPr) {
+		if (styleP?.Align != null)
+			para.TextAlignment = styleP.Align.Value;
+		if (pPr?.Justification?.Val != null)
+			para.TextAlignment = mapjustify(pPr.Justification.Val.Value);
+	}
+
 	Paragraph buildpara(W.Paragraph p) {
 		var para = new Paragraph { Margin = new Thickness(0) };
 		var pPr = p.ParagraphProperties;
@@ -1878,35 +2014,44 @@ sealed class DocxViewer : IDocViewer {
 			if (double.IsNaN(para.LineHeight) || para.LineHeight < 1)
 				para.LineHeight = pt2dip(15.6);
 			para.Margin = thicknonneg(mL, mT, mR, mB);
-			if (pPr?.Justification?.Val?.Value == W.JustificationValues.Center)
-				para.TextAlignment = TextAlignment.Center;
+			applyalignment(para, styleP, pPr);
 			return para;
 		}
 
 		para.Margin = thicknonneg(mL, mT, mR, mB);
 		para.TextIndent = first; // 含 0：清除样式遗留的首行缩进
 
-		if (pPr?.Justification?.Val != null) {
-			var v = pPr.Justification.Val.Value;
-			if (v == W.JustificationValues.Center) para.TextAlignment = TextAlignment.Center;
-			else if (v == W.JustificationValues.Right) para.TextAlignment = TextAlignment.Right;
-			else if (v == W.JustificationValues.Both) para.TextAlignment = TextAlignment.Justify;
-		}
+		// 对齐：样式 jc（Title=center）→ 段落 jc 覆盖
+		applyalignment(para, styleP, pPr);
 		if (hasDrawing && string.IsNullOrWhiteSpace(plainText))
 			para.TextAlignment = TextAlignment.Center;
 
+		// 样式默认字符：Title 等 sz/b 只在 style rPr，run 上常无字号
+		var styleR = resolvestylerpr(styleId);
+		if (styleR != null) {
+			if (styleR.FontSizePt != null && styleR.FontSizePt.Value > 0)
+				para.FontSize = pt2dip(styleR.FontSizePt.Value);
+			if (styleR.Bold == true)
+				para.FontWeight = FontWeights.Bold;
+			if (styleR.Italic == true)
+				para.FontStyle = FontStyles.Italic;
+			if (!string.IsNullOrEmpty(styleR.FontName))
+				para.FontFamily = new FontFamily(styleR.FontName + ", 宋体, SimSun, Microsoft YaHei UI");
+		}
+
 		var lv = headinglevel(styleName, styleId);
+		// 章节标题：无样式字号时用默认阶梯；有样式字号以样式为准
 		if (lv == 1) {
 			para.FontWeight = FontWeights.Bold;
-			para.FontSize = pt2dip(18);
+			if (styleR?.FontSizePt == null) para.FontSize = pt2dip(18);
 			para.Margin = thicknonneg(mL, Math.Max(mT, 14), mR, Math.Max(mB, 8));
 		} else if (lv == 2) {
 			para.FontWeight = FontWeights.Bold;
-			para.FontSize = pt2dip(14);
+			if (styleR?.FontSizePt == null) para.FontSize = pt2dip(14);
 			para.Margin = thicknonneg(mL, Math.Max(mT, 12), mR, Math.Max(mB, 6));
 		} else if (lv == 3) {
 			para.FontWeight = FontWeights.SemiBold;
-			para.FontSize = pt2dip(12);
+			if (styleR?.FontSizePt == null) para.FontSize = pt2dip(12);
 			para.Margin = thicknonneg(mL, Math.Max(mT, 10), mR, Math.Max(mB, 4));
 		}
 
@@ -1926,15 +2071,15 @@ sealed class DocxViewer : IDocViewer {
 
 		foreach (var child in p.ChildElements) {
 			if (child is W.Run run)
-				addruntopara(para, run);
+				addruntopara(para, run, styleR);
 			else if (child is W.Hyperlink hl) {
 				foreach (var hr in hl.Descendants<W.Run>())
-					addruntopara(para, hr);
+					addruntopara(para, hr, styleR);
 			} else if (child is W.SdtRun sdtRun) {
 				var sc = sdtRun.SdtContentRun;
 				if (sc != null)
 					foreach (var hr in sc.Elements<W.Run>())
-						addruntopara(para, hr);
+						addruntopara(para, hr, styleR);
 			}
 		}
 		if (para.Inlines.Count == 0)
@@ -2018,7 +2163,7 @@ sealed class DocxViewer : IDocViewer {
 		}
 	}
 
-	void addruntopara(Paragraph para, W.Run run) {
+	void addruntopara(Paragraph para, W.Run run, StyleRPr styleR = null) {
 		foreach (var drawing in run.Elements<W.Drawing>()) {
 			var img = trybuildimage(drawing);
 			if (img != null)
@@ -2029,7 +2174,12 @@ sealed class DocxViewer : IDocViewer {
 			para.Inlines.Add(new Run("\t"));
 		if (!string.IsNullOrEmpty(text)) {
 			var r = new Run(text);
-			applyrunprops(r, run.RunProperties);
+			// 先继承段落样式字号/加粗，再被 run 属性覆盖
+			if (para.FontSize > 0) r.FontSize = para.FontSize;
+			if (para.FontWeight != FontWeights.Normal) r.FontWeight = para.FontWeight;
+			if (para.FontStyle != FontStyles.Normal) r.FontStyle = para.FontStyle;
+			if (para.FontFamily != null) r.FontFamily = para.FontFamily;
+			applyrunprops(r, run.RunProperties, styleR);
 			para.Inlines.Add(r);
 		}
 		foreach (var br in run.Elements<W.Break>()) {
@@ -2038,7 +2188,18 @@ sealed class DocxViewer : IDocViewer {
 		}
 	}
 
-	void applyrunprops(Run r, W.RunProperties rPr) {
+	void applyrunprops(Run r, W.RunProperties rPr, StyleRPr styleR = null) {
+		// 样式默认（run 未指定时）
+		if (styleR != null) {
+			if (styleR.FontSizePt != null && styleR.FontSizePt.Value > 0 && r.FontSize <= 0)
+				r.FontSize = pt2dip(styleR.FontSizePt.Value);
+			if (styleR.Bold == true && r.FontWeight == FontWeights.Normal)
+				r.FontWeight = FontWeights.Bold;
+			if (styleR.Italic == true && r.FontStyle == FontStyles.Normal)
+				r.FontStyle = FontStyles.Italic;
+			if (!string.IsNullOrEmpty(styleR.FontName) && r.FontFamily == null)
+				r.FontFamily = new FontFamily(styleR.FontName + ", 宋体, SimSun, Microsoft YaHei UI");
+		}
 		if (rPr == null) {
 			if (r.FontSize <= 0) r.FontSize = pt2dip(10.5);
 			return;
@@ -2112,9 +2273,10 @@ sealed class DocxViewer : IDocViewer {
 				SnapsToDevicePixels = true,
 				Tag = bi,
 				Cursor = Cursors.Hand,
-				ToolTip = "右键：复制图片 / 另存为文件",
+				ToolTip = "双击预览 · 右键：复制 / 另存为",
 			};
 			img.ContextMenu = buildimgmenu(bi);
+			ImageOverlay.Wire(img, bi);
 			return img;
 		} catch (Exception ex) {
 			DocLog.Warn($"Docx image: {ex.Message}");
@@ -2124,6 +2286,8 @@ sealed class DocxViewer : IDocViewer {
 
 	static ContextMenu buildimgmenu(BitmapSource bi) {
 		var cm = new ContextMenu();
+		var mview = new MenuItem { Header = "预览图片" };
+		mview.Click += (_, _) => ImageOverlay.Show(bi);
 		var mcopy = new MenuItem { Header = "复制图片" };
 		mcopy.Click += (_, _) => {
 			try {
@@ -2150,6 +2314,7 @@ sealed class DocxViewer : IDocViewer {
 				MessageBox.Show("保存失败: " + ex.Message, "DocviewWPF");
 			}
 		};
+		cm.Items.Add(mview);
 		cm.Items.Add(mcopy);
 		cm.Items.Add(msave);
 		return cm;

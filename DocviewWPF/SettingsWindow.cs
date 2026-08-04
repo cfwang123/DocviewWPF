@@ -14,7 +14,10 @@ sealed class SettingsWindow : Window {
 	readonly CheckBox ckrestore;
 	readonly CheckBox ckside;
 	readonly CheckBox ckwindow;
+	readonly CheckBox ckmdheadnum;
+	readonly TextBlock lbmdheadnumhint;
 	readonly ComboBox cbfont;
+	readonly ComboBox cbtab;
 	readonly ComboBox cblang;
 	readonly TextBlock lbtheme;
 	readonly TextBlock lbthemehint;
@@ -22,6 +25,9 @@ sealed class SettingsWindow : Window {
 	readonly TextBlock lbfontsec;
 	readonly TextBlock lbfonthint;
 	readonly TextBlock lbfontsize;
+	readonly TextBlock lbtabsec;
+	readonly TextBlock lbtabhint;
+	readonly TextBlock lbtabsize;
 	readonly TextBlock lblangsec;
 	readonly TextBlock lblanghint;
 	readonly TextBlock lbnotes;
@@ -32,6 +38,7 @@ sealed class SettingsWindow : Window {
 	int selectedTheme;
 
 	static readonly double[] FontChoices = { 10, 11, 12, 13, 14, 15, 16 };
+	static readonly int[] TabChoices = { 2, 3, 4, 8 };
 
 	public SettingsWindow(Window owner) {
 		Owner = owner;
@@ -69,8 +76,11 @@ sealed class SettingsWindow : Window {
 			draft.RestoreTabs = ckrestore.IsChecked == true;
 			draft.ShowSidePanel = ckside.IsChecked == true;
 			draft.RememberWindow = ckwindow.IsChecked == true;
+			draft.MdHeadingAutoNumber = ckmdheadnum.IsChecked == true;
 			if (cbfont.SelectedItem is double fs)
 				draft.UiFontSize = fs;
+			if (cbtab.SelectedItem is int ts)
+				draft.MdTabSize = ts;
 			if (cblang.SelectedItem is LangItem li)
 				draft.Language = li.Code;
 			draft.WinLeft = AppSettings.Current.WinLeft;
@@ -198,6 +208,51 @@ sealed class SettingsWindow : Window {
 		fontRow.Children.Add(cbfont);
 		body.Children.Add(fontRow);
 
+		lbtabsec = sectiontitle(Loc.T("md_tab_section"));
+		body.Children.Add(lbtabsec);
+		lbtabhint = new TextBlock {
+			Text = Loc.T("md_tab_hint"),
+			FontSize = 12,
+			Foreground = brushres("TextMuted") ?? Brushes.Gray,
+			TextWrapping = TextWrapping.Wrap,
+			Margin = new Thickness(0, 0, 0, 6),
+		};
+		body.Children.Add(lbtabhint);
+		var tabRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+		lbtabsize = new TextBlock {
+			Text = Loc.T("md_tab_size"),
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(0, 0, 12, 0),
+			Foreground = brushres("TextPrimary") ?? Brushes.Black,
+			FontSize = 13,
+		};
+		tabRow.Children.Add(lbtabsize);
+		cbtab = new ComboBox {
+			Width = 100,
+			Height = 28,
+			HorizontalAlignment = HorizontalAlignment.Left,
+		};
+		foreach (var t in TabChoices)
+			cbtab.Items.Add(t);
+		var tabWant = draft.MdTabSize;
+		var tabBest = 1; // default 3
+		for (var i = 0; i < TabChoices.Length; i++) {
+			if (TabChoices[i] == tabWant) { tabBest = i; break; }
+		}
+		cbtab.SelectedIndex = tabBest;
+		tabRow.Children.Add(cbtab);
+		body.Children.Add(tabRow);
+		ckmdheadnum = mkcheck(Loc.T("md_heading_autonum"), draft.MdHeadingAutoNumber);
+		body.Children.Add(ckmdheadnum);
+		lbmdheadnumhint = new TextBlock {
+			Text = Loc.T("md_heading_autonum_hint"),
+			FontSize = 12,
+			Foreground = brushres("TextMuted") ?? Brushes.Gray,
+			TextWrapping = TextWrapping.Wrap,
+			Margin = new Thickness(22, 0, 0, 8),
+		};
+		body.Children.Add(lbmdheadnumhint);
+
 		lbnotes = sectiontitle(Loc.T("notes_section"));
 		body.Children.Add(lbnotes);
 		lbnotesbody = new TextBlock {
@@ -245,6 +300,11 @@ sealed class SettingsWindow : Window {
 		if (lbfontsec != null) lbfontsec.Text = Loc.T("ui_font_section");
 		if (lbfonthint != null) lbfonthint.Text = Loc.T("ui_font_hint");
 		if (lbfontsize != null) lbfontsize.Text = Loc.T("font_size_px");
+		if (lbtabsec != null) lbtabsec.Text = Loc.T("md_tab_section");
+		if (lbtabhint != null) lbtabhint.Text = Loc.T("md_tab_hint");
+		if (lbtabsize != null) lbtabsize.Text = Loc.T("md_tab_size");
+		if (ckmdheadnum != null) ckmdheadnum.Content = Loc.T("md_heading_autonum");
+		if (lbmdheadnumhint != null) lbmdheadnumhint.Text = Loc.T("md_heading_autonum_hint");
 		if (lbnotes != null) lbnotes.Text = Loc.T("notes_section");
 		if (lbnotesbody != null) lbnotesbody.Text = Loc.T("settings_notes");
 		if (bcancel != null) bcancel.Content = Loc.T("cancel");

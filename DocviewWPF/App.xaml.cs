@@ -5,9 +5,44 @@ using System.Windows;
 namespace DocviewWPF;
 
 public partial class App : Application {
-	static int showingError;
-
 	protected override void OnStartup(StartupEventArgs e) {
+		// 更新替换模式：不抢单实例、不进主窗
+		if (AppUpdater.IsApplyUpdateArg(e.Args)) {
+			try {
+				var code = AppUpdater.RunApplyUpdate(e.Args);
+				Shutdown(code);
+			} catch (Exception ex) {
+				try { Console.Error.WriteLine(ex); } catch { /* ignore */ }
+				try {
+					MessageBox.Show(ex.ToString(), "DocviewWPF 更新失败",
+						MessageBoxButton.OK, MessageBoxImage.Error);
+				} catch { /* ignore */ }
+				Shutdown(1);
+			}
+			return;
+		}
+
+		// 命令行自检：不进 UI，验证 TXT/MD 真实入口后退出
+		if (SelfTest.IsSelfTestArg(e.Args)) {
+			try {
+				int n;
+				if (SelfTest.IsTyporaClickArg(e.Args))
+					n = SelfTest.RunTyporaClickPerf(Console.Out);
+				else
+					n = SelfTest.RunMd(Console.Out);
+				Shutdown(n == 0 ? 0 : 1);
+			} catch (Exception ex) {
+				try { Console.Error.WriteLine(ex); } catch { /* ignore */ }
+				Shutdown(1);
+			}
+			return;
+		}
+
+		// 彩色 emoji：Win11 风格旗帜等
+		try {
+			Emoji.Wpf.EmojiData.EnableWindowsStyleFlags = true;
+		} catch { /* ignore */ }
+
 		// 原生库在 x64\ / x86\，须在任何 pdfium/Skia 调用前设置搜索路径
 		try { NativeBootstrap.Init(); } catch { /* ignore */ }
 
@@ -73,26 +108,17 @@ public partial class App : Application {
 
 	public static void ShowError(Exception ex, string context = null) {
 		if (ex == null) return;
-		if (System.Threading.Interlocked.CompareExchange(ref showingError, 1, 0) != 0)
-			return;
+		// 不再用互斥丢弃连续报错：ErrorWindow 同窗追加滚动
 		try {
-			var title = string.IsNullOrEmpty(context)
-				? $"DocviewWPF · {ex.GetType().Name}"
-				: $"DocviewWPF · {ex.GetType().Name} @ {context}";
-			var body = ex.Message;
-			var inner = ex.InnerException;
-			while (inner != null) {
-				body += "\n→ " + inner.Message;
-				inner = inner.InnerException;
-			}
-			if (Current?.Dispatcher != null && !Current.Dispatcher.CheckAccess())
-				Current.Dispatcher.Invoke(() => MessageBox.Show(body, title, MessageBoxButton.OK, MessageBoxImage.Error));
-			else
-				MessageBox.Show(body, title, MessageBoxButton.OK, MessageBoxImage.Error);
+			ErrorWindow.Report(ex, context);
 		} catch {
-			// ignore
-		} finally {
-			System.Threading.Interlocked.Exchange(ref showingError, 0);
+			try {
+				var body = ex.ToString();
+				if (Current?.Dispatcher != null && !Current.Dispatcher.CheckAccess())
+					Current.Dispatcher.Invoke(() => MessageBox.Show(body, "DocviewWPF", MessageBoxButton.OK, MessageBoxImage.Error));
+				else
+					MessageBox.Show(body, "DocviewWPF", MessageBoxButton.OK, MessageBoxImage.Error);
+			} catch { /* ignore */ }
 		}
 	}
 }

@@ -28,6 +28,14 @@ sealed class AppSettings {
 	[DataMember(Name = "uiFontSize")]
 	public double UiFontSize = 12;
 
+	/// <summary>Markdown Tab 显示/缩进列宽（字符），默认 3。影响列表嵌套层级与预览缩进。</summary>
+	[DataMember(Name = "mdTabSize")]
+	public int MdTabSize = 3;
+
+	/// <summary>Markdown 标题自动编号（预览/目录显示，不改源码）。默认开启。</summary>
+	[DataMember(Name = "mdHeadingAutoNumber")]
+	public bool MdHeadingAutoNumber = true;
+
 	/// <summary>界面语言：zh / en / ja / ko。</summary>
 	[DataMember(Name = "language")]
 	public string Language = "zh";
@@ -110,6 +118,8 @@ sealed class AppSettings {
 		if (UiFontSize > 18) UiFontSize = 18;
 		// 常用档：取整到 0.5
 		UiFontSize = Math.Round(UiFontSize * 2) / 2;
+		if (MdTabSize < 1) MdTabSize = 1;
+		if (MdTabSize > 8) MdTabSize = 8;
 		Language = normalizeLang(Language);
 	}
 
@@ -131,6 +141,8 @@ sealed class AppSettings {
 			ShowSidePanel = ShowSidePanel,
 			RememberWindow = RememberWindow,
 			UiFontSize = UiFontSize,
+			MdTabSize = MdTabSize,
+			MdHeadingAutoNumber = MdHeadingAutoNumber,
 			Language = Language,
 			WinLeft = WinLeft,
 			WinTop = WinTop,
@@ -147,6 +159,8 @@ sealed class AppSettings {
 		ShowSidePanel = s.ShowSidePanel;
 		RememberWindow = s.RememberWindow;
 		UiFontSize = s.UiFontSize;
+		MdTabSize = s.MdTabSize;
+		MdHeadingAutoNumber = s.MdHeadingAutoNumber;
 		Language = s.Language;
 		WinLeft = s.WinLeft;
 		WinTop = s.WinTop;

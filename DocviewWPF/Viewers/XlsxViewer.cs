@@ -55,7 +55,20 @@ sealed class XlsxViewer : IDocViewer {
 		get {
 			var name = (sheets.SelectedItem as TabItem)?.Header?.ToString() ?? "-";
 			var g = currentgrid();
-			var sel = g != null && g.HasSelection ? "  ·  已选单元格" : "";
+			var sel = "";
+			if (g != null && g.HasSelection) {
+				g.GetSelection(out var r0, out var c0, out var r1, out var c1);
+				if (r0 == 0 && r1 >= g.Rows - 1 && c0 == c1)
+					sel = $"  ·  已选列 {c0 + 1}";
+				else if (r0 == 0 && r1 >= g.Rows - 1)
+					sel = $"  ·  已选列 {c0 + 1}-{c1 + 1}";
+				else if (c0 == 0 && c1 >= g.Cols - 1 && r0 == r1)
+					sel = $"  ·  已选行 {r0 + 1}";
+				else if (c0 == 0 && c1 >= g.Cols - 1)
+					sel = $"  ·  已选行 {r0 + 1}-{r1 + 1}";
+				else
+					sel = "  ·  已选单元格";
+			}
 			var ed = editMode ? "  ·  编辑中" : "";
 			var d = dirty ? " *" : "";
 			return $"XLSX  {name}{d}  ·  {sheetCount} 表  ·  {(int)(zoom * 100)}%{ed}{sel}";
@@ -102,6 +115,7 @@ sealed class XlsxViewer : IDocViewer {
 		};
 		root.Children.Add(sheets);
 		root.Children.Add(empty);
+		MainWindow.WireFileDropTarget(root);
 	}
 
 	/// <summary>后台线程可调用：OpenXml 稠密解析，不碰 WPF。</summary>

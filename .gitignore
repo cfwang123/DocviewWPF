@@ -5,7 +5,8 @@
 
 # Project-local / private notes (optional keep out of remote)
 /AGENTS.md
-/mydocs/
+/ref
+*TODO*.md
 *.7z
 
 # Build outputs

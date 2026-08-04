@@ -29,6 +29,17 @@ sealed class ReadingProgress {
 	[DataMember(Name = "page")]
 	public int Page;
 
+	/// <summary>目录侧栏：null=未记录（用全局默认）；false=关；true=开。</summary>
+	[DataMember(Name = "side", EmitDefaultValue = false)]
+	public bool? Side;
+
+	/// <summary>
+	/// MD 模式：null=未记录；0=预览；1=纯代码；2=Typora；3=侧预。
+	/// （旧数据可能仅用 Sheet：1=预览，10/11/12=编辑布局。）
+	/// </summary>
+	[DataMember(Name = "mdMode", EmitDefaultValue = false)]
+	public int? MdMode;
+
 	[DataMember(Name = "tick")]
 	public long Tick;
 }
@@ -110,7 +121,10 @@ static class ReadingProgressStore {
 		return null;
 	}
 
-	public static void Set(string path, double h, double v, double zoom = 1, int sheet = 0, int page = 0) {
+	/// <param name="side">null=不改已存目录偏好；有值则写入。</param>
+	/// <param name="mdMode">null=不改；有值则写入（见 <see cref="ReadingProgress.MdMode"/>）。</param>
+	public static void Set(string path, double h, double v, double zoom = 1, int sheet = 0, int page = 0,
+		bool? side = null, int? mdMode = null) {
 		path = norm(path);
 		if (path == null) return;
 		if (double.IsNaN(h) || double.IsInfinity(h)) h = 0;
@@ -136,6 +150,8 @@ static class ReadingProgressStore {
 			hit.Zoom = zoom;
 			hit.Sheet = sheet;
 			hit.Page = page;
+			if (side != null) hit.Side = side;
+			if (mdMode != null) hit.MdMode = mdMode;
 			hit.Tick = DateTime.UtcNow.Ticks;
 			// LRU：按 Tick 丢弃最旧
 			if (data.Files.Count > MAX_ENTRIES) {

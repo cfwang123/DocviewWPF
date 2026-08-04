@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -31,6 +32,8 @@ sealed class PdfViewer : IDocViewer {
 	/// <summary>槽位保留余量：超出预取范围也不立刻拆掉，避免回滚白页。</summary>
 	const int SLOT_KEEP = 4;
 	const double PAGE_GAP = 10;
+	/// <summary>页边框厚度（DIP）；Host 外扩同宽，避免 Border 挤占内容导致位图被 Stretch 发糊。</summary>
+	const double PAGE_BORDER = 1;
 	const double MIN_ZOOM = 0.2;
 	const double MAX_ZOOM = 4.0;
 	const double SIDE_W = 220;
@@ -143,12 +146,18 @@ sealed class PdfViewer : IDocViewer {
 	/// <summary>目录跳转：距页顶比例（与 pendingOutlinePage 配对）。</summary>
 	double pendingOutlineFrac;
 	int outlineNavToken;
+	/// <summary>跳转历史（目录/链接/页码）；Alt+←/→ 后退/前进。</summary>
+	readonly List<NavMark> navBack = new();
+	readonly List<NavMark> navFwd = new();
+	bool navRestoring;
+	const int MAX_NAV = 64;
 	List<PdfOutlineNode> outline;
 	/// <summary>目录筛选关键字。</summary>
 	string outlineQuery = "";
 	// 右键命中的图片（ContextMenuOpening 时填充）
 	PdfImageInfo ctxImage;
 	MenuItem mnCopyText;
+	MenuItem mnViewImg;
 	MenuItem mnCopyImg;
 	MenuItem mnSaveImg;
 
@@ -165,6 +174,19 @@ sealed class PdfViewer : IDocViewer {
 		set => seteditmode(value);
 	}
 	public bool IsDirty => editDirty || editDoc.Dirty;
+
+	// ---------- PDF 标注模式（旁路 JSON，不写 PDF 本体）----------
+	bool annotMode;
+	readonly PdfAnnotDoc annotDoc = new();
+	PdfAnnotSurface annotSurface;
+	DispatcherTimer annotSaveTimer;
+	public event Action AnnotModeChanged;
+	public event Action AnnotChanged;
+	public bool AnnotMode {
+		get => annotMode;
+		set => setannotmode(value);
+	}
+	public bool AnnotDirty => annotDoc != null && annotDoc.Dirty;
 
 	// 选区：字符索引闭区间；跨页时 end 页可不同
 	int selPage = -1, selStart = -1, selEnd = -1;
@@ -214,14 +236,17 @@ sealed class PdfViewer : IDocViewer {
 			var sel = selPage >= 0 && selStart >= 0 ? "  ·  已选文字" : "";
 			var rot = pageRotate == 0 ? "" : $"  ·  旋转{pageRotate * 90}°";
 			var ed = editMode ? "  ·  编辑中" : "";
-			var d = IsDirty ? " *" : "";
-			return $"PDF{d}  第 {cur}/{pageCount} 页  ·  {(int)(zoom * 100)}%{rot}{ed}{sel}";
+			var an = annotMode ? "  ·  标注中" : "";
+			var d = (IsDirty || AnnotDirty) ? " *" : "";
+			return $"PDF{d}  第 {cur}/{pageCount} 页  ·  {(int)(zoom * 100)}%{rot}{ed}{an}{sel}";
 		}
 	}
 	public int PageCount => pageCount;
 	public int CurrentPage => pageCount <= 0 ? 0 : estimatepage() + 1;
 
 	public event Action StatusChanged;
+	/// <summary>滚动定位章节时：理想书签 1-based 页码（主窗章节列表镜像用）。</summary>
+	public event Action<int> OutlineHighlightChanged;
 
 	public PdfViewer() {
 		tree = new TreeView {
@@ -293,13 +318,17 @@ sealed class PdfViewer : IDocViewer {
 		canvas = new Canvas {
 			Background = new SolidColorBrush(WpfColor.FromRgb(0xE5, 0xE7, 0xEB)),
 			SnapsToDevicePixels = true,
+			UseLayoutRounding = true,
 		};
 		selLayer = new Canvas {
 			Background = WpfBrushes.Transparent,
 			IsHitTestVisible = true,
+			UseLayoutRounding = true,
 		};
 		contentRoot = new Grid {
 			Background = new SolidColorBrush(WpfColor.FromRgb(0xE5, 0xE7, 0xEB)),
+			SnapsToDevicePixels = true,
+			UseLayoutRounding = true,
 		};
 		editSurface = new PdfEditSurface(editDoc) {
 			IsHitTestVisible = false,
@@ -326,9 +355,40 @@ sealed class PdfViewer : IDocViewer {
 			},
 			pt => findpageat(pt.Y),
 			(page, xPt, yPt) => trycaptureexisting(page, xPt, yPt));
+
+		annotSurface = new PdfAnnotSurface(annotDoc) {
+			Visibility = Visibility.Visible,
+		};
+		annotSurface.SetLayout(
+			page => {
+				if (page < 0 || page >= pageCount || pageW == null || pageH == null || pageTop == null)
+					return (0, 0, 1, 1);
+				var left = Math.Max(0, (contentW - pageW[page]) / 2);
+				return (left, pageTop[page], pageW[page], pageH[page]);
+			},
+			page => {
+				viewpagesizept(page, out var pw, out var ph);
+				return (Math.Max(1, pw), Math.Max(1, ph));
+			},
+			pt => findpageat(pt.Y),
+			scroller);
+		annotSurface.Changed += () => {
+			scheduleannotsave();
+			try { AnnotChanged?.Invoke(); } catch { /* ignore */ }
+			raisestatus();
+		};
+		annotSurface.SelectionChanged += () => {
+			try { AnnotChanged?.Invoke(); } catch { /* ignore */ }
+		};
+		annotSurface.ToolChanged += () => {
+			try { AnnotChanged?.Invoke(); } catch { /* ignore */ }
+		};
+
 		contentRoot.Children.Add(canvas);
 		contentRoot.Children.Add(selLayer);
+		contentRoot.Children.Add(annotSurface);
 		contentRoot.Children.Add(editSurface);
+		Panel.SetZIndex(annotSurface, 15);
 		Panel.SetZIndex(editSurface, 20);
 
 		scroller = new ScrollViewer {
@@ -381,8 +441,12 @@ sealed class PdfViewer : IDocViewer {
 			raisestatus();
 		};
 		scroller.SizeChanged += (_, _) => {
+			var old = dpiScale;
 			updatedpiscale();
-			updateviewport(gen);
+			if (Math.Abs(dpiScale - old) > 0.02)
+				onDpichanged();
+			else
+				updateviewport(gen);
 		};
 		initzoominput();
 
@@ -405,12 +469,44 @@ sealed class PdfViewer : IDocViewer {
 		root.Children.Add(pside);
 		root.Children.Add(sp);
 		root.Children.Add(main);
+		MainWindow.WireFileDropTarget(root);
+		MainWindow.WireFileDropTarget(scroller);
 
 		initselection();
 		startworker();
-		root.Loaded += (_, _) => updatedpiscale();
+		root.Loaded += (_, _) => {
+			updatedpiscale();
+			// 首帧再读一次 DPI（部分机器 Loaded 时 Visual 尚未挂到最终显示器）
+			try {
+				root.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => {
+					if (disposed) return;
+					var old = dpiScale;
+					updatedpiscale();
+					if (pageCount > 0 && Math.Abs(dpiScale - old) > 0.02)
+						onDpichanged();
+				}));
+			} catch { /* ignore */ }
+			// net48：DpiChanged 在 Window 上，不在 FrameworkElement
+			try {
+				var win = Window.GetWindow(root);
+				if (win != null && !dpiHooked) {
+					dpiHooked = true;
+					win.DpiChanged += onwindowdpichanged;
+				}
+			} catch { /* ignore */ }
+		};
 		// 构造时侧栏先隐藏，等目录加载结果再决定
 		setside(false);
+	}
+
+	bool dpiHooked;
+
+	void onwindowdpichanged(object sender, DpiChangedEventArgs e) {
+		var next = e.NewDpi.DpiScaleX > 0.1 ? e.NewDpi.DpiScaleX : 1.0;
+		if (Math.Abs(next - dpiScale) < 0.02) return;
+		DocLog.Info($"PdfViewer DpiChanged {dpiScale:F3} -> {next:F3}");
+		dpiScale = next;
+		onDpichanged();
 	}
 
 	public void Load(string path) => Load(path, null);
@@ -424,10 +520,16 @@ sealed class PdfViewer : IDocViewer {
 		pdfPath = FilePath;
 		pageRotate = 0;
 		clearsel();
+		clearnavhistory();
 		editDoc.Clear();
 		editDirty = false;
 		if (editMode) seteditmode(false);
 		editSurface?.RebuildAll();
+		// 切换文档前先落盘旧标注
+		try { flushannotsave(); } catch { /* ignore */ }
+		if (annotMode) setannotmode(false);
+		annotDoc.Clear();
+		annotSurface?.RebuildAll();
 		DocLog.Info($"PdfViewer.Load begin path={pdfPath}");
 
 		var t0 = Environment.TickCount;
@@ -478,6 +580,14 @@ sealed class PdfViewer : IDocViewer {
 			}
 		});
 
+		// 加载同目录标注 JSON
+		try {
+			annotDoc.LoadForPdf(pdfPath);
+			annotSurface?.RebuildAll();
+		} catch (Exception ex) {
+			DocLog.Error("annot load", ex);
+		}
+
 		updatedpiscale();
 		// 加载时布局与逻辑缩放对齐
 		layoutZoom = zoom;
@@ -491,7 +601,7 @@ sealed class PdfViewer : IDocViewer {
 		gen++;
 		scheduleui();
 		raisestatus();
-		DocLog.Info($"PdfViewer.Load done pages={pageCount}");
+		DocLog.Info($"PdfViewer.Load done pages={pageCount} dpiScale={dpiScale:F3}");
 	}
 
 	public void SetZoom(double z) => bakezoomimmediate(z);
@@ -610,6 +720,7 @@ sealed class PdfViewer : IDocViewer {
 	public void GoPrevPage() {
 		var cur = estimatepage();
 		if (cur <= 0) return;
+		// 翻页不记历史（连续 PgUp/PgDn 不刷屏）
 		scrolltopage(cur - 1);
 	}
 
@@ -624,7 +735,34 @@ sealed class PdfViewer : IDocViewer {
 		var p = page1Based - 1;
 		if (p < 0) p = 0;
 		if (p >= pageCount) p = pageCount - 1;
-		scrolltopage(p);
+		// 页码框 / Home / End / g 等显式跳转记历史
+		jumpwithhistory(p, 0, fromOutline: false);
+	}
+
+	/// <summary>跳转历史：后退到跳转前位置。无记录返回 false。</summary>
+	public bool TryNavBack() {
+		if (navRestoring || disposed || navBack.Count == 0) return false;
+		var cur = capturenav();
+		var target = navBack[navBack.Count - 1];
+		navBack.RemoveAt(navBack.Count - 1);
+		navFwd.Add(cur);
+		if (navFwd.Count > MAX_NAV) navFwd.RemoveAt(0);
+		restorenav(target);
+		DocLog.Info($"PdfViewer nav back → p={target.Page + 1} remaining={navBack.Count}");
+		return true;
+	}
+
+	/// <summary>跳转历史：前进。无记录返回 false。</summary>
+	public bool TryNavForward() {
+		if (navRestoring || disposed || navFwd.Count == 0) return false;
+		var cur = capturenav();
+		var target = navFwd[navFwd.Count - 1];
+		navFwd.RemoveAt(navFwd.Count - 1);
+		navBack.Add(cur);
+		if (navBack.Count > MAX_NAV) navBack.RemoveAt(0);
+		restorenav(target);
+		DocLog.Info($"PdfViewer nav forward → p={target.Page + 1} remaining={navFwd.Count}");
+		return true;
 	}
 
 	public FindResult Find(string text, bool forward, bool ignoreCase, bool restart = false, bool fromView = false) {
@@ -823,12 +961,45 @@ sealed class PdfViewer : IDocViewer {
 
 	public bool TryCopySelection() => copyselection();
 	public bool HasOutline => hasOutline;
-	public bool SidePanelVisible => sideVisible;
-	public void SetSidePanelVisible(bool show) => setside(show);
+
+	/// <summary>
+	/// 主窗章节列表高亮：当前视口对应书签的 1-based 页码；无则 -1。
+	/// </summary>
+	public int GetActiveOutlinePage1() {
+		if (disposed || !hasOutline || outlineFlat.Count == 0 || pageCount <= 0) return -1;
+		try {
+			var page = estimatepage();
+			var frac = pagefrac(page);
+			var best = findoutlineat(page, frac);
+			if (best == null) return -1;
+			return best.Page + 1; // OutlineEntry.Page 为 0-based
+		} catch {
+			return -1;
+		}
+	}
+
+	/// <summary>主窗侧栏 TOC：标题 / 深度 / 1-based 页码。</summary>
+	public List<(string Title, int Depth, int Page1)> GetOutlineSnapshot() {
+		var list = new List<(string, int, int)>();
+		void walk(List<PdfOutlineNode> nodes, int d) {
+			if (nodes == null) return;
+			foreach (var n in nodes) {
+				if (n == null) continue;
+				list.Add((n.Title ?? "", d, n.PageIndex >= 0 ? n.PageIndex + 1 : 0));
+				if (n.Children != null && n.Children.Count > 0)
+					walk(n.Children, d + 1);
+			}
+		}
+		try { walk(outline, 0); } catch { /* ignore */ }
+		return list;
+	}
+	public bool SidePanelVisible => false;
+	public void SetSidePanelVisible(bool show) => setside(false);
 
 	// ---------- 编辑模式 API ----------
 	void seteditmode(bool on) {
 		if (editMode == on) return;
+		if (on && annotMode) setannotmode(false);
 		editMode = on;
 		if (editSurface != null) {
 			editSurface.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
@@ -842,9 +1013,121 @@ sealed class PdfViewer : IDocViewer {
 		}
 		// 编辑时禁用文字框选层命中，避免冲突
 		if (selLayer != null)
-			selLayer.IsHitTestVisible = !on;
+			selLayer.IsHitTestVisible = !on && !annotMode;
 		try { EditModeChanged?.Invoke(); } catch { /* ignore */ }
 		raisestatus();
+	}
+
+	// ---------- 标注模式 API ----------
+	void setannotmode(bool on) {
+		if (annotMode == on) return;
+		if (on && editMode) seteditmode(false);
+		annotMode = on;
+		if (annotSurface != null) {
+			annotSurface.Width = contentW;
+			annotSurface.Height = contentH;
+			annotSurface.EditMode = on;
+			if (on) {
+				annotSurface.CurrentTool = PdfAnnotSurface.Tool.Hand;
+				annotSurface.Relayout();
+				try { annotSurface.Focus(); } catch { /* ignore */ }
+			} else {
+				flushannotsave();
+			}
+		}
+		if (selLayer != null)
+			selLayer.IsHitTestVisible = !on && !editMode;
+		try { AnnotModeChanged?.Invoke(); } catch { /* ignore */ }
+		raisestatus();
+	}
+
+	void scheduleannotsave() {
+		if (annotSaveTimer == null) {
+			annotSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+			annotSaveTimer.Tick += (_, _) => {
+				annotSaveTimer.Stop();
+				flushannotsave();
+			};
+		}
+		annotSaveTimer.Stop();
+		annotSaveTimer.Start();
+	}
+
+	void flushannotsave() {
+		try {
+			if (annotSaveTimer != null) annotSaveTimer.Stop();
+		} catch { /* ignore */ }
+		if (annotDoc == null || !annotDoc.Dirty) return;
+		if (string.IsNullOrEmpty(pdfPath)) return;
+		annotDoc.Save(pdfPath);
+		try { AnnotChanged?.Invoke(); } catch { /* ignore */ }
+		raisestatus();
+	}
+
+	public PdfAnnotItem SelectedAnnot => annotSurface?.Selected;
+
+	public void AnnotSetTool(PdfAnnotSurface.Tool t) {
+		if (!annotMode) setannotmode(true);
+		if (annotSurface != null) annotSurface.CurrentTool = t;
+	}
+
+	public void AnnotSetEraserMode(PdfAnnotSurface.EraserMode mode) {
+		if (annotSurface != null) annotSurface.CurrentEraserMode = mode;
+	}
+
+	public PdfAnnotSurface.EraserMode AnnotEraserMode =>
+		annotSurface?.CurrentEraserMode ?? PdfAnnotSurface.EraserMode.Point;
+
+	public void AnnotDeleteSelected() => annotSurface?.DeleteSelected();
+	public void AnnotCopySelected() => annotSurface?.CopySelected();
+	public void AnnotPaste() => annotSurface?.PasteClipboard();
+	public void AnnotDuplicate() => annotSurface?.DuplicateSelected();
+	public void AnnotGroupSelected() => annotSurface?.GroupSelected();
+	public void AnnotUngroupSelected() => annotSurface?.UngroupSelected();
+	public PdfAnnotSurface.Tool AnnotCurrentTool =>
+		annotSurface?.CurrentTool ?? PdfAnnotSurface.Tool.Hand;
+
+	public void AnnotSetColor(WpfColor c) {
+		if (!annotMode) setannotmode(true);
+		annotSurface?.SetColor(c);
+	}
+
+	public void AnnotSetFont(string name) {
+		if (!annotMode) setannotmode(true);
+		annotSurface?.ApplyFont(name);
+	}
+
+	public void AnnotSetFontSize(double pt) {
+		if (!annotMode) setannotmode(true);
+		annotSurface?.ApplyFontSize(pt);
+	}
+
+	public bool SaveAnnots() {
+		if (string.IsNullOrEmpty(pdfPath)) return false;
+		return annotDoc.Save(pdfPath);
+	}
+
+	public string AnnotFilePath => PdfAnnotDoc.PathForPdf(pdfPath);
+
+	/// <summary>
+	/// 将当前标注栅格化烧入 PDF 后另存。不覆盖源文件时传入 outPath。
+	/// 成功返回输出路径；无标注或失败抛异常/返回 null。
+	/// </summary>
+	public string SaveAnnotsAsPdf(string outPath) {
+		if (session == null || pageSizesPt == null || pageCount <= 0)
+			throw new InvalidOperationException("文档未打开");
+		if (string.IsNullOrWhiteSpace(outPath))
+			throw new ArgumentException("路径无效", nameof(outPath));
+		outPath = Path.GetFullPath(outPath);
+		// 先落盘 JSON 旁路
+		try { flushannotsave(); } catch { /* ignore */ }
+		if (annotDoc.Items.Count == 0)
+			throw new InvalidOperationException("当前没有标注可写入");
+
+		// 有视图旋转时仍按原始页渲染叠加（与 SaveEdits 一致）
+		PdfAnnotSave.SaveRasterized(session, pageSizesPt, annotDoc.Items, outPath);
+		DocLog.Info($"PdfViewer.SaveAnnotsAsPdf ok path={outPath} items={annotDoc.Items.Count}");
+		return outPath;
 	}
 
 	public PdfEditItem SelectedEdit => editSurface?.Selected;
@@ -1207,6 +1490,8 @@ sealed class PdfViewer : IDocViewer {
 
 	public void Dispose() {
 		if (disposed) return;
+		// 先落盘标注再标 disposed
+		try { flushannotsave(); } catch { /* ignore */ }
 		disposed = true;
 		gen++;
 		workerStop = true;
@@ -1215,6 +1500,13 @@ sealed class PdfViewer : IDocViewer {
 		clearslots();
 		clearcache();
 		cleartextcache();
+		try {
+			if (dpiHooked) {
+				var win = Window.GetWindow(root);
+				if (win != null) win.DpiChanged -= onwindowdpichanged;
+				dpiHooked = false;
+			}
+		} catch { /* ignore */ }
 		try {
 			if (outlineDebounce != null) {
 				outlineDebounce.Stop();
@@ -1225,6 +1517,12 @@ sealed class PdfViewer : IDocViewer {
 			if (zoomRenderTimer != null) {
 				zoomRenderTimer.Stop();
 				zoomRenderTimer = null;
+			}
+		} catch { /* ignore */ }
+		try {
+			if (annotSaveTimer != null) {
+				annotSaveTimer.Stop();
+				annotSaveTimer = null;
 			}
 		} catch { /* ignore */ }
 		zoomHold = false;
@@ -1271,6 +1569,16 @@ sealed class PdfViewer : IDocViewer {
 		};
 		scroller.MouseDoubleClick += (_, e) => {
 			if (e.ChangedButton != MouseButton.Left || selecting || panning) return;
+			// 双击图片 → 全窗预览；否则 100% ⇄ 适宽
+			try {
+				var pt = e.GetPosition(selLayer);
+				var hit = hitimage(pt);
+				if (hit?.Bitmap != null) {
+					e.Handled = true;
+					ImageOverlay.Show(hit.Bitmap);
+					return;
+				}
+			} catch { /* ignore */ }
 			e.Handled = true;
 			if (Math.Abs(zoom - 1.0) < 0.05) ZoomFitWidth();
 			else setzoomcore(1.0, e.GetPosition(scroller));
@@ -1361,9 +1669,13 @@ sealed class PdfViewer : IDocViewer {
 				if (copyselection()) e.Handled = true;
 			}
 		};
-		// 右键菜单：文字复制 + 图片复制/另存
+		// 右键菜单：文字复制 + 图片预览/复制/另存
 		mnCopyText = new MenuItem { Header = "复制文字(_C)", InputGestureText = "Ctrl+C" };
 		mnCopyText.Click += (_, _) => copyselection();
+		mnViewImg = new MenuItem { Header = "预览图片" };
+		mnViewImg.Click += (_, _) => {
+			if (ctxImage?.Bitmap != null) ImageOverlay.Show(ctxImage.Bitmap);
+		};
 		mnCopyImg = new MenuItem { Header = "复制图片" };
 		mnCopyImg.Click += (_, _) => copyctximage();
 		mnSaveImg = new MenuItem { Header = "图片另存为…" };
@@ -1372,6 +1684,7 @@ sealed class PdfViewer : IDocViewer {
 		cm.Opened += onctxopened;
 		cm.Items.Add(mnCopyText);
 		cm.Items.Add(new Separator());
+		cm.Items.Add(mnViewImg);
 		cm.Items.Add(mnCopyImg);
 		cm.Items.Add(mnSaveImg);
 		selLayer.ContextMenu = cm;
@@ -1384,6 +1697,7 @@ sealed class PdfViewer : IDocViewer {
 	void onctxopened(object sender, RoutedEventArgs e) {
 		ctxImage = null;
 		mnCopyText.IsEnabled = hassel();
+		if (mnViewImg != null) mnViewImg.IsEnabled = false;
 		mnCopyImg.IsEnabled = false;
 		mnSaveImg.IsEnabled = false;
 		try {
@@ -1394,6 +1708,7 @@ sealed class PdfViewer : IDocViewer {
 				pt = Mouse.GetPosition(selLayer);
 			ctxImage = hitimage(pt);
 			if (ctxImage?.Bitmap != null) {
+				if (mnViewImg != null) mnViewImg.IsEnabled = true;
 				mnCopyImg.IsEnabled = true;
 				mnSaveImg.IsEnabled = true;
 			}
@@ -1526,6 +1841,15 @@ sealed class PdfViewer : IDocViewer {
 		if (panning) return;
 		if (e.ChangedButton != MouseButton.Left) return;
 		var pt = e.GetPosition(selLayer);
+
+		// Ctrl+左键：书内链接跳转（或打开 URI）
+		if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) {
+			if (trylinkat(pt)) {
+				e.Handled = true;
+				return;
+			}
+		}
+
 		// 预抽当前页文字（异步）
 		var pageHint = findpageat(pt.Y);
 		if (pageHint >= 0 && pageHint < pageCount)
@@ -1560,10 +1884,13 @@ sealed class PdfViewer : IDocViewer {
 			e.Handled = true;
 			return;
 		}
-		// 悬停光标：字上 IBeam，空白箭头
+		// 悬停光标：Ctrl+链接手型；字上 IBeam；空白箭头
 		if (!selecting && !panning) {
 			var hov = e.GetPosition(selLayer);
-			selLayer.Cursor = hitchar(hov, out _, out _, strict: true) ? Cursors.IBeam : Cursors.Arrow;
+			if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && hitlink(hov) != null)
+				selLayer.Cursor = Cursors.Hand;
+			else
+				selLayer.Cursor = hitchar(hov, out _, out _, strict: true) ? Cursors.IBeam : Cursors.Arrow;
 		}
 		if (!selecting || e.LeftButton != MouseButtonState.Pressed) return;
 		var pt = e.GetPosition(selLayer);
@@ -2198,21 +2525,27 @@ sealed class PdfViewer : IDocViewer {
 		clearcache();
 		try {
 			recalcmetrics();
+			logzoomdiag("after_recalc");
 			foreach (var kv in slots) {
 				if (kv.Key < 0 || kv.Key >= pageCount) continue;
 				// 多 tile → 合成单图软显示，避免条带在新高度下被 Fill 压扁
 				forcesoftsingle(kv.Value);
 			}
+			logzoomdiag("after_soft");
 			try {
 				contentRoot.UpdateLayout();
 				scroller.UpdateLayout();
 			} catch { /* ignore */ }
+			logzoomdiag("after_layout");
 			if (!keepScroll && mouseInScroller.HasValue)
 				applyzoomlockscroll(mouseInScroller.Value);
+			logzoomdiag("after_scroll1");
 			// 主动刷视口：新建槽用邻近位图作临时图，避免白页（hold 中禁止贴缓存分块）
 			updateviewport(gen);
+			logzoomdiag("after_viewport");
 			if (!keepScroll && mouseInScroller.HasValue)
 				applyzoomlockscroll(mouseInScroller.Value);
+			logzoomdiag("after_scroll2");
 		} catch (Exception ex) {
 			DocLog.Error("applyzoomlayout", ex);
 		}
@@ -2227,7 +2560,74 @@ sealed class PdfViewer : IDocViewer {
 			$"zoom apply z={oldZ:F3}->{zoom:F3} p={zoomLockPage} " +
 			$"frac=({zoomLockFracX:F3},{zoomLockFracY:F3}) xOnPage={zoomLockXOnPage} " +
 			$"scroll {h0:F0},{v0:F0} -> {scroller.HorizontalOffset:F0},{scroller.VerticalOffset:F0} " +
-			$"pin=({zoomPinH:F0},{zoomPinV:F0}) reuse={reuseLock} keepScroll={keepScroll}");
+			$"pin=({zoomPinH:F0},{zoomPinV:F0}) reuse={reuseLock} keepScroll={keepScroll} " +
+			$"cw={contentW:F0} ch={contentH:F0} hold={zoomHold}");
+		logzoomdiag("apply_end");
+	}
+
+	/// <summary>缩放诊断：槽位位置、图源纵横比 vs 布局、滚动。</summary>
+	void logzoomdiag(string tag) {
+		try {
+			var vis = estimatepage();
+			var sb = new StringBuilder();
+			sb.Append($"zoomdiag[{tag}] z={zoom:F3} lz={layoutZoom:F3} hold={zoomHold} gen={gen} ");
+			sb.Append($"cw={contentW:F0} ch={contentH:F0} ");
+			sb.Append($"scroll=({scroller?.HorizontalOffset:F0},{scroller?.VerticalOffset:F0}) ");
+			sb.Append($"vp=({scroller?.ViewportWidth:F0}x{scroller?.ViewportHeight:F0}) ");
+			sb.Append($"ext=({scroller?.ExtentWidth:F0}x{scroller?.ExtentHeight:F0}) ");
+			sb.Append($"slots={slots.Count} visP={vis}");
+			if (annotSurface != null)
+				sb.Append($" annot=({annotSurface.Width:F0}x{annotSurface.Height:F0} hit={annotSurface.IsHitTestVisible})");
+			DocLog.Info(sb.ToString());
+
+			// 视口附近页槽细节（最多 3 页）
+			var n = 0;
+			foreach (var kv in slots) {
+				var p = kv.Key;
+				var slot = kv.Value;
+				if (slot?.Host == null) continue;
+				if (p < vis - 1 || p > vis + 1) continue;
+				if (n++ >= 3) break;
+				var left = Canvas.GetLeft(slot.Host);
+				var top = Canvas.GetTop(slot.Host);
+				var expectL = pageW != null && p >= 0 && p < pageCount
+					? Math.Max(0, (contentW - pageW[p]) / 2) - PAGE_BORDER
+					: double.NaN;
+				var expectT = pageTop != null && p >= 0 && p < pageCount
+					? pageTop[p] - PAGE_BORDER
+					: double.NaN;
+				var dL = double.IsNaN(expectL) ? 0 : left - expectL;
+				var dT = double.IsNaN(expectT) ? 0 : top - expectT;
+				var pw = p >= 0 && p < pageCount && pageW != null ? pageW[p] : 0;
+				var ph = p >= 0 && p < pageCount && pageH != null ? pageH[p] : 0;
+				var layoutAr = pw > 1 ? ph / pw : 0;
+				var tileInfo = "";
+				if (slot.Tiles != null) {
+					for (var t = 0; t < slot.Tiles.Length && t < 4; t++) {
+						var img = slot.Tiles[t];
+						var px = 0;
+						var py = 0;
+						var ar = 0.0;
+						if (img?.Source is BitmapSource bs) {
+							px = bs.PixelWidth;
+							py = bs.PixelHeight;
+							ar = px > 0 ? py / (double)px : 0;
+						}
+						var stretch = img?.Stretch.ToString() ?? "?";
+						var arDiff = layoutAr > 0 && ar > 0 ? Math.Abs(ar - layoutAr) : -1;
+						tileInfo += $" t{t}=[{px}x{py} ar={ar:F3} dip={img?.Width:F0}x{img?.Height:F0} st={stretch} dAR={arDiff:F3}]";
+					}
+				}
+				DocLog.Info(
+					$"zoomdiag[{tag}] slot p={p} host=({left:F1},{top:F1},{slot.Host.Width:F0}x{slot.Host.Height:F0}) " +
+					$"expect=({expectL:F1},{expectT:F1}) d=({dL:F1},{dT:F1}) page={pw:F0}x{ph:F0} ar={layoutAr:F3} " +
+					$"tiles={slot.Tiles?.Length ?? 0}{tileInfo}");
+				if (Math.Abs(dL) > 1.5 || Math.Abs(dT) > 1.5)
+					DocLog.Warn($"zoomdiag[{tag}] SLOT_POS_MISMATCH p={p} dL={dL:F1} dT={dT:F1}");
+			}
+		} catch (Exception ex) {
+			DocLog.Warn($"zoomdiag[{tag}] fail: {ex.Message}");
+		}
 	}
 
 	void capturezoomlock(WpfPoint mouseInScroller) {
@@ -2346,8 +2746,22 @@ sealed class PdfViewer : IDocViewer {
 		} finally {
 			zoomHold = false;
 		}
-		// 放开 hold 后再补一帧预取
+		// 放开 hold：再布局叠加层 + 补一帧预取
+		try {
+			if (editSurface != null) {
+				editSurface.Width = contentW;
+				editSurface.Height = contentH;
+				editSurface.Relayout();
+			}
+			if (annotSurface != null) {
+				annotSurface.Width = contentW;
+				annotSurface.Height = contentH;
+				annotSurface.Relayout();
+			}
+		} catch { /* ignore */ }
+		logzoomdiag("render_after_hold");
 		try { scheduleui(); } catch { /* ignore */ }
+		logzoomdiag("render_after_ui");
 	}
 
 	static void softscaleimages(PageSlot slot) {
@@ -2511,11 +2925,11 @@ sealed class PdfViewer : IDocViewer {
 		return MIN_ZOOM;
 	}
 
+	/// <summary>文档内嵌目录侧栏已废弃（改用主窗「章节列表」），始终隐藏。</summary>
 	void setside(bool show) {
-		sideVisible = show;
-		colside.Width = show ? new GridLength(SIDE_W) : new GridLength(0);
-		pside.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-		// 通知主窗同步工具栏「目录」按钮状态
+		sideVisible = false;
+		colside.Width = new GridLength(0);
+		pside.Visibility = Visibility.Collapsed;
 		raisestatus();
 	}
 
@@ -2526,6 +2940,52 @@ sealed class PdfViewer : IDocViewer {
 		} catch {
 			dpiScale = 1.0;
 		}
+	}
+
+	/// <summary>显示器 DPI 变化：清缓存按新物理像素 1:1 重渲。</summary>
+	void onDpichanged() {
+		if (disposed || pageCount <= 0) return;
+		try {
+			clearcache();
+			cancelall();
+			gen++;
+			scheduleui();
+			raisestatus();
+		} catch (Exception ex) {
+			DocLog.Error("onDpichanged", ex);
+		}
+	}
+
+	/// <summary>DIP 对齐到设备像素，减少亚像素贴图发糊。</summary>
+	double snapdip(double v) {
+		if (dpiScale < 0.1) return v;
+		return Math.Round(v * dpiScale) / dpiScale;
+	}
+
+	/// <summary>位图逻辑尺寸与控件 DIP 接近时 1:1 贴图（锐利），否则 Fant 软缩放。</summary>
+	static void setbitmapsmoothing(System.Windows.Controls.Image img, BitmapSource bmp) {
+		if (img == null || bmp == null) return;
+		try {
+			var dipW = img.Width > 1 ? img.Width : 0;
+			var dipH = img.Height > 1 ? img.Height : 0;
+			var logicalW = bmp.DpiX > 1
+				? bmp.PixelWidth * 96.0 / bmp.DpiX
+				: bmp.PixelWidth;
+			var logicalH = bmp.DpiY > 1
+				? bmp.PixelHeight * 96.0 / bmp.DpiY
+				: bmp.PixelHeight;
+			if (dipW < 1) dipW = logicalW;
+			if (dipH < 1) dipH = logicalH;
+			var match = Math.Abs(logicalW - dipW) <= 1.0 && Math.Abs(logicalH - dipH) <= 1.0;
+			if (match) {
+				// Stretch.None + 最近邻：禁止任何插值缩放（边框挤占时 Fill 会抹糊文字）
+				img.Stretch = Stretch.None;
+				WpfRenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.NearestNeighbor);
+			} else {
+				img.Stretch = Stretch.Fill;
+				WpfRenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Fant);
+			}
+		} catch { /* ignore */ }
 	}
 
 	// ---------- 目录 ----------
@@ -2551,7 +3011,7 @@ sealed class PdfViewer : IDocViewer {
 		}
 		hasOutline = true;
 		if (eoutline != null) eoutline.Visibility = Visibility.Visible;
-		setside(true);
+		setside(false);
 		rebuildoutlineui();
 		// 目录异步可能晚于滚动恢复：在恢复窗口内则展开并多拍同步
 		if (restoreOutlinePage >= 0)
@@ -2647,6 +3107,9 @@ sealed class PdfViewer : IDocViewer {
 		var page = node.PageIndex;
 		if (page < 0 || page >= pageCount) return;
 		var frac = node.HasDestY ? clamp(node.TopFrac, 0, 0.98) : 0;
+		// 在防抖前先记下当前位置（以首次点击为准，连点只记一次）
+		if (pendingOutlinePage < 0)
+			pushnavbeforejump(page, frac);
 		pendingOutlinePage = page;
 		pendingOutlineFrac = frac;
 		lastOutlinePage = page;
@@ -2661,6 +3124,7 @@ sealed class PdfViewer : IDocViewer {
 			pendingOutlineFrac = 0;
 			if (p < 0) return;
 			try {
+				// 历史已在 queue 时 push，此处直接滚
 				scrolltopage(p, fromOutline: true, topFrac: f);
 			} catch (Exception ex) {
 				DocLog.Error("outline jump", ex);
@@ -2762,6 +3226,8 @@ sealed class PdfViewer : IDocViewer {
 			finally { syncTree = false; }
 			pendingExpandOutline = false;
 		}
+		// 主窗章节列表：书签页 1-based（与 GetOutlineSnapshot 的 Tag 一致）
+		try { OutlineHighlightChanged?.Invoke(best.Page + 1); } catch { /* ignore */ }
 		// 展开后可见路径可能变深，重新取 sel
 		var sel = OutlineUi.FindVisibleOnPath(best.Item);
 		if (sel == null) return;
@@ -2855,10 +3321,31 @@ sealed class PdfViewer : IDocViewer {
 		canvas.Height = contentH;
 		selLayer.Width = contentW;
 		selLayer.Height = contentH;
+		// 立刻重放页槽位置/尺寸（与 pageW/H/Top 同步）。
+		// 否则 content 已变而 Host 仍停在旧 left/top，中间会闪一帧错位（日志 SLOT_POS_MISMATCH）。
+		foreach (var kv in slots) {
+			var p = kv.Key;
+			var slot = kv.Value;
+			if (slot?.Host == null || p < 0 || p >= pageCount) continue;
+			try {
+				placepagehost(slot, pageW[p], pageH[p], pageTop[p]);
+				if (slot.Tiles != null && slot.Tiles.Length == 1 && slot.Tiles[0] != null) {
+					slot.Tiles[0].Width = pageW[p];
+					slot.Tiles[0].Height = Math.Max(1, pageH[p]);
+				}
+			} catch { /* ignore */ }
+		}
 		if (editSurface != null) {
 			editSurface.Width = contentW;
 			editSurface.Height = contentH;
+			// 与页槽一样：布局变即刻 Relayout，避免缩放 hold 期间叠加层停在旧坐标闪一帧
 			try { editSurface.Relayout(); } catch { /* ignore */ }
+		}
+		if (annotSurface != null) {
+			annotSurface.Width = contentW;
+			annotSurface.Height = contentH;
+			// Relayout 内部 refitText=false，只放位置/尺寸，不 Measure 文本
+			try { annotSurface.Relayout(); } catch { /* ignore */ }
 		}
 	}
 
@@ -3072,6 +3559,17 @@ sealed class PdfViewer : IDocViewer {
 		softscaleimages(slot);
 	}
 
+	/// <summary>Host 外扩边框，内容区 = 页面 DIP；位置对齐设备像素。</summary>
+	void placepagehost(PageSlot slot, double w, double h, double top) {
+		var left = snapdip(Math.Max(0, (contentW - w) / 2));
+		var topSnap = snapdip(top);
+		Canvas.SetLeft(slot.Host, left - PAGE_BORDER);
+		Canvas.SetTop(slot.Host, topSnap - PAGE_BORDER);
+		// Border 吃掉 PAGE_BORDER*2，Host 多给这么多 → 子 Image 可用区仍是 w×h
+		slot.Host.Width = w + PAGE_BORDER * 2;
+		slot.Host.Height = h + PAGE_BORDER * 2;
+	}
+
 	/// <summary>多 tile 软排版：高度按位图像素高度比例，避免 Stretch 改变条带纵横比。</summary>
 	void layoutslotproportional(PageSlot slot) {
 		if (slot?.Tiles == null || slot.Tiles.Length == 0) return;
@@ -3079,11 +3577,7 @@ sealed class PdfViewer : IDocViewer {
 		if (p < 0 || p >= pageCount || pageW == null || pageH == null || pageTop == null) return;
 		var w = pageW[p];
 		var h = pageH[p];
-		var left = Math.Max(0, (contentW - w) / 2);
-		Canvas.SetLeft(slot.Host, left);
-		Canvas.SetTop(slot.Host, pageTop[p]);
-		slot.Host.Width = w;
-		slot.Host.Height = h;
+		placepagehost(slot, w, h, pageTop[p]);
 		var n = slot.Tiles.Length;
 		if (n == 1) {
 			slot.Tiles[0].Visibility = Visibility.Visible;
@@ -3123,11 +3617,7 @@ sealed class PdfViewer : IDocViewer {
 		if (p < 0 || p >= pageCount || pageW == null || pageH == null || pageTop == null) return;
 		var w = pageW[p];
 		var h = pageH[p];
-		var left = Math.Max(0, (contentW - w) / 2);
-		Canvas.SetLeft(slot.Host, left);
-		Canvas.SetTop(slot.Host, pageTop[p]);
-		slot.Host.Width = w;
-		slot.Host.Height = h;
+		placepagehost(slot, w, h, pageTop[p]);
 		var n = slot.Tiles.Length;
 		var need = tilecount(p);
 		// 齐套且非软显示：标准分块高度
@@ -3138,6 +3628,9 @@ sealed class PdfViewer : IDocViewer {
 				if (th > remain) th = remain;
 				if (th < 0) th = 0;
 				slot.Tiles[t].Visibility = Visibility.Visible;
+				slot.Tiles[t].Stretch = Stretch.Fill;
+				slot.Tiles[t].HorizontalAlignment = HorizontalAlignment.Stretch;
+				slot.Tiles[t].VerticalAlignment = VerticalAlignment.Stretch;
 				slot.Tiles[t].Width = w;
 				slot.Tiles[t].Height = Math.Max(1, th);
 				remain -= th;
@@ -3146,9 +3639,33 @@ sealed class PdfViewer : IDocViewer {
 		}
 		// 软显示或未齐套
 		if (n == 1) {
-			slot.Tiles[0].Visibility = Visibility.Visible;
-			slot.Tiles[0].Width = w;
-			slot.Tiles[0].Height = Math.Max(1, h);
+			var img = slot.Tiles[0];
+			img.Visibility = Visibility.Visible;
+			// 软缩放：若位图纵横比与页框差太多，用 Uniform 居中避免 Fill 压扁/错位感
+			var useUniform = false;
+			if (fillExistingTiles && img.Source is BitmapSource bs && bs.PixelWidth > 8 && w > 1) {
+				var arSrc = bs.PixelHeight / (double)bs.PixelWidth;
+				var arBox = h / w;
+				if (Math.Abs(arSrc - arBox) > 0.04) {
+					useUniform = true;
+					DocLog.Warn(
+						$"soft AR mismatch p={p} src={bs.PixelWidth}x{bs.PixelHeight} ar={arSrc:F3} " +
+						$"box={w:F0}x{h:F0} ar={arBox:F3} -> Uniform");
+				}
+			}
+			if (useUniform) {
+				img.Stretch = Stretch.Uniform;
+				img.HorizontalAlignment = HorizontalAlignment.Center;
+				img.VerticalAlignment = VerticalAlignment.Center;
+				img.Width = w;
+				img.Height = Math.Max(1, h);
+			} else {
+				img.Stretch = Stretch.Fill;
+				img.HorizontalAlignment = HorizontalAlignment.Stretch;
+				img.VerticalAlignment = VerticalAlignment.Stretch;
+				img.Width = w;
+				img.Height = Math.Max(1, h);
+			}
 			return;
 		}
 		layoutslotproportional(slot);
@@ -3239,9 +3756,6 @@ sealed class PdfViewer : IDocViewer {
 				UseLayoutRounding = true,
 				Source = bmps[t],
 			};
-			try {
-				WpfRenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Fant);
-			} catch { /* ignore */ }
 			imgs[t] = img;
 		}
 		stack.Children.Clear();
@@ -3251,6 +3765,11 @@ sealed class PdfViewer : IDocViewer {
 		if (slot.PageLabel != null)
 			slot.PageLabel.Visibility = Visibility.Collapsed;
 		layoutslot(slot, fillExistingTiles: false);
+		// 布局后按「逻辑宽≈控件宽」选最近邻，避免全清图也被 Fant 抹糊
+		for (var t = 0; t < need; t++) {
+			if (imgs[t].Source is BitmapSource bs)
+				setbitmapsmoothing(imgs[t], bs);
+		}
 	}
 
 	/// <param name="aggressive">true=视口/预取页（预览+全清）；false=仅保槽页补预览。</param>
@@ -3299,16 +3818,7 @@ sealed class PdfViewer : IDocViewer {
 		if (slot?.Tiles == null || tile < 0 || tile >= slot.Tiles.Length) return;
 		if (!ReferenceEquals(slot.Tiles[tile].Source, bmp)) {
 			slot.Tiles[tile].Source = bmp;
-			// 位图 DPI 已对齐布局 DIP 时逻辑宽≈img.Width → Nearest；否则 Fant 比 HighQuality 更锐利一些
-			var img = slot.Tiles[tile];
-			var dipW = img.Width > 1 ? img.Width : pageW[slot.Page];
-			var logicalW = bmp.DpiX > 1
-				? bmp.PixelWidth * 96.0 / bmp.DpiX
-				: bmp.PixelWidth;
-			var mode = Math.Abs(logicalW - dipW) <= 1.5
-				? BitmapScalingMode.NearestNeighbor
-				: BitmapScalingMode.Fant;
-			WpfRenderOptions.SetBitmapScalingMode(img, mode);
+			setbitmapsmoothing(slot.Tiles[tile], bmp);
 		}
 		if (hideLabel && slot.PageLabel != null)
 			slot.PageLabel.Visibility = Visibility.Collapsed;
@@ -3651,6 +4161,154 @@ sealed class PdfViewer : IDocViewer {
 		}
 	}
 
+	/// <summary>Ctrl+点击链接：书内跳转或打开 URI。</summary>
+	bool trylinkat(WpfPoint canvasPt) {
+		var hit = hitlink(canvasPt);
+		if (hit == null) return false;
+		if (hit.DestPageIndex >= 0 && hit.DestPageIndex < pageCount) {
+			var frac = hit.HasDestY ? clamp(hit.TopFrac, 0, 0.98) : 0;
+			DocLog.Info($"PdfViewer link → page={hit.DestPageIndex + 1} frac={frac:F3}");
+			jumpwithhistory(hit.DestPageIndex, frac, fromOutline: true);
+			return true;
+		}
+		if (!string.IsNullOrEmpty(hit.Uri)) {
+			tryopenuri(hit.Uri);
+			return true;
+		}
+		return false;
+	}
+
+	/// <summary>显式跳转：先记当前位置再滚到目标。</summary>
+	void jumpwithhistory(int page, double topFrac, bool fromOutline) {
+		if (page < 0 || page >= pageCount || disposed) return;
+		topFrac = clamp(topFrac, 0, 0.98);
+		pushnavbeforejump(page, topFrac);
+		scrolltopage(page, fromOutline: fromOutline, topFrac: topFrac);
+	}
+
+	struct NavMark {
+		public int Page;
+		public double TopFrac;
+		public double H;
+	}
+
+	NavMark capturenav() {
+		var p = 0;
+		if (pageCount > 0 && pageTop != null)
+			p = findpageat(scroller.VerticalOffset + 1);
+		if (p < 0) p = 0;
+		if (p >= pageCount) p = Math.Max(0, pageCount - 1);
+		return new NavMark {
+			Page = p,
+			TopFrac = pagefrac(p),
+			H = scroller?.HorizontalOffset ?? 0,
+		};
+	}
+
+	/// <summary>跳转前压入当前位置；目标与当前几乎相同则跳过。</summary>
+	void pushnavbeforejump(int toPage, double toFrac) {
+		if (navRestoring || disposed || pageCount <= 0) return;
+		var cur = capturenav();
+		toFrac = clamp(toFrac, 0, 0.98);
+		// 目标几乎就是当前视口：不记
+		if (cur.Page == toPage && Math.Abs(cur.TopFrac - toFrac) < 0.01)
+			return;
+		// 与栈顶重复不叠推
+		if (navBack.Count > 0 && nearmark(navBack[navBack.Count - 1], cur))
+			return;
+		navBack.Add(cur);
+		if (navBack.Count > MAX_NAV) navBack.RemoveAt(0);
+		navFwd.Clear();
+	}
+
+	void restorenav(NavMark m) {
+		if (disposed || pageCount <= 0) return;
+		navRestoring = true;
+		try {
+			var p = m.Page;
+			if (p < 0) p = 0;
+			if (p >= pageCount) p = pageCount - 1;
+			scrolltopage(p, fromOutline: false, topFrac: clamp(m.TopFrac, 0, 0.98));
+			try {
+				scroller.ScrollToHorizontalOffset(Math.Max(0, m.H));
+			} catch { /* ignore */ }
+		} finally {
+			navRestoring = false;
+		}
+	}
+
+	void clearnavhistory() {
+		navBack.Clear();
+		navFwd.Clear();
+	}
+
+	static bool nearmark(NavMark a, NavMark b) =>
+		a.Page == b.Page
+		&& Math.Abs(a.TopFrac - b.TopFrac) < 0.02
+		&& Math.Abs(a.H - b.H) < 8;
+
+	/// <summary>命中页内链接（canvas 坐标）。</summary>
+	PdfLinkHit hitlink(WpfPoint canvasPt) {
+		if (pageCount <= 0 || session == null || pageW == null || pageH == null) return null;
+		if (!canvastopagept(canvasPt, out var page, out var vx, out var vy)) return null;
+		// 视图旋转坐标 → 未旋转页坐标（左上 Y 向下）
+		var ow = pageSizesPt[page].Width;
+		var oh = pageSizesPt[page].Height;
+		unmapviewpt(ref vx, ref vy, ow, oh, pageRotate);
+		PdfLinkHit hit = null;
+		try {
+			PdfIo.WithLock(() => {
+				if (session == null) return;
+				hit = session.HitLink(page, vx, vy);
+			});
+		} catch (Exception ex) {
+			DocLog.Warn($"HitLink p={page}: {ex.Message}");
+			return null;
+		}
+		return hit;
+	}
+
+	/// <summary>canvas → 当前视图页坐标（旋转后，左上 Y 向下，pt）。</summary>
+	bool canvastopagept(WpfPoint canvasPt, out int page, out double pageX, out double pageY) {
+		page = -1;
+		pageX = 0;
+		pageY = 0;
+		if (pageCount <= 0 || pageW == null || pageH == null || pageTop == null) return false;
+		var p = findpageat(canvasPt.Y);
+		if (p < 0 || p >= pageCount) return false;
+		var left = Math.Max(0, (contentW - pageW[p]) / 2);
+		var top = pageTop[p];
+		var relX = canvasPt.X - left;
+		var relY = canvasPt.Y - top;
+		if (relX < -2 || relX > pageW[p] + 2) return false;
+		if (relY < -2 || relY > pageH[p] + 2) return false;
+		viewpagesizept(p, out var vpw, out var vph);
+		var sx = vpw / Math.Max(1e-6, pageW[p]);
+		var sy = vph / Math.Max(1e-6, pageH[p]);
+		page = p;
+		pageX = relX * sx;
+		pageY = relY * sy;
+		return true;
+	}
+
+	static void tryopenuri(string uri) {
+		if (string.IsNullOrWhiteSpace(uri)) return;
+		// 仅允许常见协议，避免 javascript: 等
+		var ok = uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+			|| uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+			|| uri.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
+			|| uri.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase);
+		if (!ok) {
+			DocLog.Warn($"link URI blocked: {uri}");
+			return;
+		}
+		try {
+			Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+		} catch (Exception ex) {
+			DocLog.Warn($"open URI: {ex.Message}");
+		}
+	}
+
 	/// <summary>将未旋转页坐标的字符列表映射到当前视图旋转坐标。</summary>
 	void mapcharlistrotate(List<PdfCharInfo> chars, int page) {
 		if (chars == null || pageRotate == 0 || page < 0 || page >= pageCount) return;
@@ -3658,6 +4316,33 @@ sealed class PdfViewer : IDocViewer {
 		var oh = pageSizesPt[page].Height;
 		foreach (var c in chars)
 			mapboxrotate(ref c.Left, ref c.Top, ref c.Right, ref c.Bottom, ow, oh, pageRotate);
+	}
+
+	/// <summary>
+	/// 视图页坐标（旋转后左上 Y 向下）→ 未旋转页坐标。W/H 为未旋转页宽高。
+	/// </summary>
+	static void unmapviewpt(ref double x, ref double y, double W, double H, int rot) {
+		rot = ((rot % 4) + 4) % 4;
+		if (rot == 0) return;
+		double nx, ny;
+		switch (rot) {
+		case 1: // 正向 (x,y)→(H-y,x)；逆 (rx,ry)→(ry, H-rx)
+			nx = y;
+			ny = H - x;
+			break;
+		case 2:
+			nx = W - x;
+			ny = H - y;
+			break;
+		case 3: // 正向 (x,y)→(y,W-x)；逆 (rx,ry)→(W-ry, rx)
+			nx = W - y;
+			ny = x;
+			break;
+		default:
+			return;
+		}
+		x = nx;
+		y = ny;
 	}
 
 	/// <summary>

@@ -1,6 +1,6 @@
 # DocviewWPF
 
-Windows multi-tab document app (.NET Framework 4.8 WPF) for **PDF / DOCX / XLSX**. Core features: fast open & continuous PDF reading, **PDF pro edit** (object-level text/image), large-sheet **XLSX** virtual grid with simple edit, DOCX structure view, Chrome-style tabs, single-instance, session restore, four UI languages (zh/en/ja/ko).
+Windows multi-tab document app (.NET Framework 4.8 WPF) for **PDF / DOCX / XLSX / TXT / Markdown**. Core features: fast open & continuous PDF reading, **PDF pro edit** (object-level text/image), large-sheet **XLSX** virtual grid with simple edit, DOCX structure view, **TXT/MD preview & edit** (MD engineer mode: source conceal / side sync / live preview), Chrome-style tabs, single-instance, session restore, four UI languages (zh/en/ja/ko).
 
 **Language:** [中文说明 (README.zh.md)](README.zh.md)
 
@@ -8,10 +8,11 @@ Windows multi-tab document app (.NET Framework 4.8 WPF) for **PDF / DOCX / XLSX*
 
 Highlights that set DocviewWPF apart from a plain PDF-only reader or office-only apps:
 
-- **Three formats in one window** — open **PDF / DOCX / XLSX** side by side in tabs (not PDF-only).
+- **Multi-format tabs** — open **PDF / DOCX / XLSX / TXT / MD** side by side (not PDF-only).
 - **PDF Pro Editor** — dedicated window for page-object edit: select / marquee multi-select, drag with live ghost preview, text replace with embedded system fonts (CJK-safe), images, whiteout, shapes; undo/redo; vector-oriented save when pdfium allows.
 - **XLSX built for large sheets** — virtualized `OnRender` grid, freeze panes, filters, column/row resize, wrap, and a simple Excel-like edit mode (merge, align, font, colors, arrow/Tab navigation, block select).
 - **DOCX reading that keeps structure** — flow layout with outline (incl. SDT fields), numbering/bullets, margins — without launching Word.
+- **TXT / Markdown** — WebView2 HTML preview (**Mermaid**, fenced **syntax highlight**); toolbar edit + save. MD engineer mode: syntax highlight + conceal, side-by-side sync preview, Typora-style live preview; outline, Ctrl+click links. See root `sample.md`.
 - **Chrome-style tabs** — reorder with animation, tear off into a new window while dragging, drop back to merge.
 - **True single-instance** — second launch activates the existing process and forwards open paths (no duplicate main windows).
 - **Session & reading progress** — optional restore of last tabs; per-file scroll/zoom/page/sheet memory for PDF, DOCX, and XLSX.
@@ -62,6 +63,8 @@ Runtime logs (from build output): `DocviewWPF\bin\Release\net48\logs\docviewwpf_
 | Esc | Exit fullscreen / clear selection |
 | Ctrl+F | Find |
 | Ctrl+C | Copy selection |
+| Ctrl+Click | PDF internal link jump (URI opens browser) |
+| Alt+← / Alt+→ | PDF nav history: back / forward |
 | Ctrl+S | Save (edit modes) |
 
 ## Project layout

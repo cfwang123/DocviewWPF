@@ -23,6 +23,18 @@ sealed class PdfImageInfo {
 	public BitmapSource Bitmap;
 }
 
+/// <summary>页内链接命中结果（书内 GoTo 或 URI）。</summary>
+sealed class PdfLinkHit {
+	/// <summary>目标页 0-based；URI 或无目标时为 -1。</summary>
+	public int DestPageIndex = -1;
+	public bool HasDestY;
+	public float DestY;
+	/// <summary>距页顶比例 0..1（由 DestY 换算）。</summary>
+	public double TopFrac;
+	/// <summary>外部 URI（http/https/mailto 等）；书内跳转时为 null。</summary>
+	public string Uri;
+}
+
 /// <summary>
 /// 单文档 pdfium 会话：常开、串行渲染/抽字（调用方保证 PdfIo.Gate）。
 /// </summary>
@@ -382,27 +394,106 @@ sealed class PdfiumSession : IDisposable {
 				dest = PdfiumNative.FPDFAction_GetDest(doc, act);
 		}
 		if (dest == IntPtr.Zero) return;
-		var idx = PdfiumNative.FPDFDest_GetDestPageIndex(doc, dest);
-		if (idx < 0) return;
+		if (!tryreaddest(dest, out var idx, out var hasY, out var destY, out var topFrac))
+			return;
 		node.PageIndex = idx;
+		node.HasDestY = hasY;
+		node.DestY = destY;
+		node.TopFrac = topFrac;
+	}
 
-		// 页内目标点：把章节标题放到视口顶部（而非仅滚到页首）
+	/// <summary>
+	/// 页内链接命中。pageX/Y：未旋转页坐标，左上原点 Y 向下（pt）。
+	/// </summary>
+	public PdfLinkHit HitLink(int pageIndex, double pageX, double pageY) {
+		throwif();
+		if (pageIndex < 0 || pageIndex >= PageCount) return null;
+		var pageH = PageSizesPt[pageIndex].Height;
+		// 转 PDF 用户空间（左下原点 Y 向上）
+		var pdfX = pageX;
+		var pdfY = pageH - pageY;
+		var page = PdfiumNative.FPDF_LoadPage(doc, pageIndex);
+		if (page == IntPtr.Zero) return null;
+		try {
+			var link = PdfiumNative.FPDFLink_GetLinkAtPoint(page, pdfX, pdfY);
+			if (link == IntPtr.Zero) return null;
+			return resolvelink(link);
+		} finally {
+			PdfiumNative.FPDF_ClosePage(page);
+		}
+	}
+
+	PdfLinkHit resolvelink(IntPtr link) {
+		var dest = PdfiumNative.FPDFLink_GetDest(doc, link);
+		var action = PdfiumNative.FPDFLink_GetAction(link);
+		if (dest == IntPtr.Zero && action != IntPtr.Zero)
+			dest = PdfiumNative.FPDFAction_GetDest(doc, action);
+
+		if (dest != IntPtr.Zero
+			&& tryreaddest(dest, out var idx, out var hasY, out var destY, out var topFrac)) {
+			return new PdfLinkHit {
+				DestPageIndex = idx,
+				HasDestY = hasY,
+				DestY = destY,
+				TopFrac = topFrac,
+			};
+		}
+
+		// 外部 URI（可选：Ctrl+点击打开浏览器）
+		if (action != IntPtr.Zero
+			&& PdfiumNative.FPDFAction_GetType(action) == PdfiumNative.PDFACTION_URI) {
+			var uri = getactionuri(action);
+			if (!string.IsNullOrEmpty(uri))
+				return new PdfLinkHit { DestPageIndex = -1, Uri = uri };
+		}
+		return null;
+	}
+
+	bool tryreaddest(IntPtr dest, out int pageIndex, out bool hasY, out float destY, out double topFrac) {
+		pageIndex = -1;
+		hasY = false;
+		destY = 0;
+		topFrac = 0;
+		if (dest == IntPtr.Zero) return false;
+		var idx = PdfiumNative.FPDFDest_GetDestPageIndex(doc, dest);
+		if (idx < 0) return false;
+		pageIndex = idx;
+		// 页内目标点：把标题放到视口顶部（而非仅滚到页首）
 		try {
 			if (PdfiumNative.FPDFDest_GetLocationInPage(dest,
-				    out _, out var hasY, out _, out _, out var y, out _) == 0)
-				return;
-			if (hasY == 0) return;
+				    out _, out var hasYVal, out _, out _, out var y, out _) == 0)
+				return true;
+			if (hasYVal == 0) return true;
 			var pageHpt = idx < PageCount ? PageSizesPt[idx].Height : 0;
-			if (pageHpt < 1) return;
+			if (pageHpt < 1) return true;
 			// PDF Y：左下原点向上 → 距页顶比例
 			var fromTop = pageHpt - y;
 			if (fromTop < 0) fromTop = 0;
 			if (fromTop > pageHpt) fromTop = pageHpt;
-			node.HasDestY = true;
-			node.DestY = y;
-			node.TopFrac = fromTop / pageHpt;
+			hasY = true;
+			destY = y;
+			topFrac = fromTop / pageHpt;
 		} catch {
 			// 部分目标类型无 XYZ，仅页码
+		}
+		return true;
+	}
+
+	string getactionuri(IntPtr action) {
+		try {
+			var len = PdfiumNative.FPDFAction_GetURIPath(doc, action, null, 0);
+			if (len <= 1) return null;
+			var buf = new byte[len];
+			var n = PdfiumNative.FPDFAction_GetURIPath(doc, action, buf, len);
+			if (n <= 1) return null;
+			var end = (int)n;
+			// 去掉尾部 \0
+			while (end > 0 && buf[end - 1] == 0) end--;
+			if (end <= 0) return null;
+			var s = Encoding.UTF8.GetString(buf, 0, end).Trim();
+			return string.IsNullOrEmpty(s) ? null : s;
+		} catch {
+			return null;
 		}
 	}
 
