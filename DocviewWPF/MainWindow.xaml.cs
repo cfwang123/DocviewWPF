@@ -21,6 +21,8 @@ using Microsoft.Win32;
 namespace DocviewWPF;
 
 public partial class MainWindow : Window {
+	/// <summary>文档区域（图片预览层挂在此 Grid 上，覆盖标签内容，不含侧栏/工具栏）。</summary>
+	public Panel DocOverlayHost => pcontent;
 	const int WM_GETMINMAXINFO = 0x0024;
 	const uint MONITOR_DEFAULTTONEAREST = 2;
 	const double TAB_DRAG_THRESHOLD = 6;
@@ -168,6 +170,8 @@ public partial class MainWindow : Window {
 			if (mnnewbrowser != null) mnnewbrowser.Click += (_, _) => openbrowsertab();
 			if (mnnewconsole != null) mnnewconsole.Click += (_, _) => openconsoletab();
 		}
+		if (bsettings != null)
+			bsettings.Click += (_, _) => opensettings();
 		syncmaxbtn();
 	}
 
@@ -403,7 +407,7 @@ public partial class MainWindow : Window {
 			};
 		mabout.Click += (_, _) => {
 			var ver = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-			var verText = ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.0.1";
+			var verText = ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.0.2";
 			MessageBox.Show(
 				Loc.Tf("about_body", verText, Loc.T("about_features")),
 				Loc.T("about"),
@@ -492,6 +496,7 @@ public partial class MainWindow : Window {
 			if (bmax != null)
 				bmax.ToolTip = WindowState == WindowState.Maximized ? Loc.T("restore") : Loc.T("maximize");
 			if (bclosewin != null) bclosewin.ToolTip = Loc.T("close_window");
+			if (bsettings != null) bsettings.ToolTip = Loc.T("tip_settings");
 
 			if (bopen != null) bopen.ToolTip = Loc.T("tip_open");
 			if (bprint != null) bprint.ToolTip = Loc.T("tip_print");
@@ -847,6 +852,10 @@ public partial class MainWindow : Window {
 			bmdlive.Click += (_, _) => setmdlayout(MdEditLayout.Typora);
 		if (bmdside != null)
 			bmdside.Click += (_, _) => setmdlayout(MdEditLayout.Side);
+		if (bmdweb != null)
+			bmdweb.Click += (_, _) => setmdpreviewengine(MdPreviewEngine.WebView);
+		if (bmdwpf != null)
+			bmdwpf.Click += (_, _) => setmdpreviewengine(MdPreviewEngine.Wpf);
 	}
 
 	/// <summary>XLSX 编辑模式工具栏：仅编辑模式显示格式按钮。</summary>
@@ -1447,12 +1456,14 @@ public partial class MainWindow : Window {
 				try { hookedMd.EditModeChanged -= ontxtmdeditmode; } catch { /* ignore */ }
 				try { hookedMd.DirtyChanged -= ontxtmddirty; } catch { /* ignore */ }
 				try { hookedMd.LayoutChanged -= ontxtmdlayout; } catch { /* ignore */ }
+				try { hookedMd.PreviewEngineChanged -= ontxtmdlayout; } catch { /* ignore */ }
 			}
 			hookedMd = m;
 			if (m != null) {
 				m.EditModeChanged += ontxtmdeditmode;
 				m.DirtyChanged += ontxtmddirty;
 				m.LayoutChanged += ontxtmdlayout;
+				m.PreviewEngineChanged += ontxtmdlayout;
 			}
 		}
 	}
@@ -1517,6 +1528,23 @@ public partial class MainWindow : Window {
 		saveprogress(m);
 	}
 
+	/// <summary>切换当前 MD（及设置）预览引擎：WebView2 / 纯 WPF。</summary>
+	void setmdpreviewengine(MdPreviewEngine eng) {
+		var m = currentviewer() as MdViewer;
+		if (m == null) return;
+		m.PreviewEngine = eng;
+		// 同步其它已开 MD 标签
+		try {
+			foreach (var d in opentabs) {
+				if (d?.Viewer is MdViewer other && !ReferenceEquals(other, m)) {
+					try { other.PreviewEngine = eng; } catch { /* ignore */ }
+				}
+			}
+		} catch { /* ignore */ }
+		synctxtmdui();
+		updatestatus();
+	}
+
 	/// <summary>Toggle 工具图标：选中时用强调色描边，未选中恢复 muted。</summary>
 	void settooliconactive(System.Windows.Shapes.Path icon, bool on) {
 		if (icon == null) return;
@@ -1553,16 +1581,26 @@ public partial class MainWindow : Window {
 		if (pmdedit != null)
 			pmdedit.Visibility = m != null && m.EditMode ? Visibility.Visible : Visibility.Collapsed;
 
+		// MD 预览引擎切换（预览/编辑都可用）
+		if (pmdengine != null)
+			pmdengine.Visibility = m != null ? Visibility.Visible : Visibility.Collapsed;
+		if (m != null) {
+			var eng = m.PreviewEngine;
+			if (bmdweb != null) bmdweb.IsChecked = eng == MdPreviewEngine.WebView;
+			if (bmdwpf != null) bmdwpf.IsChecked = eng == MdPreviewEngine.Wpf;
+		}
+
 		if (m != null && m.EditMode) {
 			var lay = m.EditLayout;
 			if (bmdsource != null) bmdsource.IsChecked = lay == MdEditLayout.Code;
 			if (bmdlive != null) bmdlive.IsChecked = lay == MdEditLayout.Typora;
 			if (bmdside != null) bmdside.IsChecked = lay == MdEditLayout.Side;
 			if (lbmdtip != null) {
+				var engTip = m.PreviewEngine == MdPreviewEngine.Wpf ? "WPF" : "Web";
 				lbmdtip.Text = lay switch {
 					MdEditLayout.Code => "纯代码 · 颜色/粗斜体/链接 · 无预览",
 					MdEditLayout.Typora => "Typora · 单栏 · conceal · 无侧预",
-					MdEditLayout.Side => "侧预 · 颜色/粗斜体/链接 · 右侧同步预览",
+					MdEditLayout.Side => $"侧预 · 右侧同步预览（{engTip}）",
 					_ => "",
 				};
 			}
@@ -3427,6 +3465,10 @@ public partial class MainWindow : Window {
 			if (leftSideVisible && kind != DocKind.Browser && kind != DocKind.Console
 				&& ReferenceEquals(current(), doc))
 				rebuildmainoutline();
+			// 命令行：内容挂上后立刻准备 IME
+			if (kind == DocKind.Console && viewer is ConsoleViewer cvLoad
+				&& ReferenceEquals(current(), doc))
+				cvLoad.PrepareImeFocus();
 		} catch (Exception ex) {
 			if (!loadstillvalid(doc, gen) && !opentabs.Contains(doc)) return;
 			DocLog.Error($"ensureloaded fail path={doc.Path}", ex);
@@ -4492,6 +4534,9 @@ public partial class MainWindow : Window {
 			ensureloaded(cur);
 		updatestatus();
 		if (leftSideVisible) rebuildmainoutline();
+		// 命令行标签：强制聚焦终端并启用 IME（首次进入否则中文要再切一次 Tab）
+		if (cur?.Viewer is ConsoleViewer cvTab)
+			cvTab.PrepareImeFocus();
 	}
 
 	void savefindtotab(DocTab d) {
@@ -6675,11 +6720,15 @@ public partial class MainWindow : Window {
 		}
 	}
 
-	/// <summary>命令行 IME（中文等）文本输入；ASCII 已由 KeyDown+ToUnicode 处理。</summary>
+	/// <summary>
+	/// 命令行文本输入：IME 中文 + 中文输入法下的 ASCII（Key 为 ImeProcessed 时 KeyDown 不发字符）。
+	/// </summary>
 	void onpreviewtextinput(object sender, TextCompositionEventArgs e) {
+		// 命令行：文字由 ConsoleViewer 透明 IME TextBox 的 TextChanged 写入，主窗勿再转发（会双字）
 		if (currentviewer() is ConsoleViewer cv && cv.IsCapturingKeys) {
-			if (cv.TryHandleText(e.Text))
-				e.Handled = true;
+			if (!cv.IsTerminalFocused)
+				cv.PrepareImeFocus();
+			return;
 		}
 	}
 
@@ -6690,17 +6739,39 @@ public partial class MainWindow : Window {
 		// Alt+键时 WPF 常把 Key 设为 System，真实键在 SystemKey
 		var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-		// 命令行标签：全部按键交给终端（含 Ctrl+P 等程序快捷键与可打印字符）
-		// 工具栏目录/Shell 编辑时除外；IME 组字键放行给 TextInput
-		if (currentviewer() is ConsoleViewer cv && cv.IsCapturingKeys) {
-			if (key == Key.ImeProcessed || key == Key.DeadCharProcessed) {
-				// 不 Handled，让 IME 产生 TextInput
+		// 文档区图片预览层：Esc 关闭；其它快捷键交给层，勿触发保存文档/全屏等
+		if (ImageOverlay.IsOpen) {
+			if (key == Key.Escape) {
+				ImageOverlay.CloseIfOpen();
+				e.Handled = true;
 				return;
 			}
-			cv.FocusTerminal();
-			// 单路径注入（ToUnicode 出字符）；始终 Handled 防止子控件/快捷键再处理 → 重复输入
-			cv.TryHandleKey(key, Keyboard.Modifiers);
-			e.Handled = true;
+			// 不 Handled，隧道继续到预览层
+			return;
+		}
+
+		// 命令行标签：输入优先走透明 IME TextBox；勿在主窗 Handled 抢走中文组字
+		if (currentviewer() is ConsoleViewer cv && cv.IsCapturingKeys) {
+			if (key == Key.LeftCtrl || key == Key.RightCtrl || key == Key.LeftAlt || key == Key.RightAlt
+				|| key == Key.LeftShift || key == Key.RightShift || key == Key.LWin || key == Key.RWin
+				|| key == Key.CapsLock || key == Key.NumLock || key == Key.Scroll) {
+				return;
+			}
+			if (!cv.IsTerminalFocused)
+				cv.PrepareImeFocus();
+
+			// 组字/可打印：完全放行给 imeBox + 系统 IME（不 Handled）
+			if (key == Key.ImeProcessed || key == Key.DeadCharProcessed)
+				return;
+			if (!ctrl && !alt && isconsoleprintablekey(key))
+				return;
+			// 中文 IME 打开时：回车/空格/方向/退格也放行（选字），勿注入 PTY
+			if (!ctrl && !alt && cv.IsImeOpen)
+				return;
+
+			// Ctrl 组合 / 无 IME 的功能键 → 终端（imeBox 内 PreviewKeyDown 也会处理）
+			var ok = cv.TryHandleKey(key, Keyboard.Modifiers);
+			if (ok) e.Handled = true;
 			return;
 		}
 
@@ -7201,6 +7272,38 @@ public partial class MainWindow : Window {
 		if (backward) i = (i - 1 + n) % n;
 		else i = (i + 1) % n;
 		tabs.SelectedIndex = i;
+	}
+
+	/// <summary>
+	/// 命令行可打印键：不 Handled KeyDown，交给 TextInput / IME（英文与中文统一路径）。
+	/// </summary>
+	static bool isconsoleprintablekey(Key key) {
+		if (key >= Key.A && key <= Key.Z) return true;
+		if (key >= Key.D0 && key <= Key.D9) return true;
+		if (key >= Key.NumPad0 && key <= Key.NumPad9) return true;
+		switch (key) {
+			case Key.Space:
+			case Key.OemMinus:
+			case Key.OemPlus:
+			case Key.OemOpenBrackets:
+			case Key.OemCloseBrackets:
+			case Key.OemPipe:
+			case Key.OemSemicolon:
+			case Key.OemQuotes:
+			case Key.OemComma:
+			case Key.OemPeriod:
+			case Key.OemQuestion:
+			case Key.OemTilde:
+			case Key.OemBackslash:
+			case Key.Divide:
+			case Key.Multiply:
+			case Key.Subtract:
+			case Key.Add:
+			case Key.Decimal:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	bool isinputfocused() {

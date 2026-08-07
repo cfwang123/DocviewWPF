@@ -120,6 +120,7 @@ static class Loc {
 
 		// —— 工具栏 ——
 		a("tip_open", "打开 (Ctrl+O)", "Open (Ctrl+O)", "開く (Ctrl+O)", "열기 (Ctrl+O)");
+		a("tip_settings", "系统参数 (Ctrl+,)", "Settings (Ctrl+,)", "設定 (Ctrl+,)", "설정 (Ctrl+,)");
 		a("tip_print", "打印 (Ctrl+P)", "Print (Ctrl+P)", "印刷 (Ctrl+P)", "인쇄 (Ctrl+P)");
 		a("tip_side", "目录 (F4)", "Outline (F4)", "目次 (F4)", "목차 (F4)");
 		a("page_label", "页码:", "Page:", "ページ:", "페이지:");
@@ -289,6 +290,13 @@ static class Loc {
 			"When on, preview and outline show 1 / 1.1 / 1.1.1 before headings (source unchanged). On by default.",
 			"オン時、プレビューと目次に 1 / 1.1 / 1.1.1 を付与（ソースは変更しません）。既定オン。",
 			"켜면 미리보기·목차에 1 / 1.1 / 1.1.1 표시(원본 파일 미변경). 기본 켜짐.");
+		a("md_preview_engine", "预览渲染", "Preview engine", "プレビュー描画", "미리보기 렌더");
+		a("md_preview_engine_hint", "WebView2：Mermaid/语法高亮更完整；纯 WPF：无浏览器内核依赖，可与 WebView 切换。默认 WebView2。",
+			"WebView2: better Mermaid/highlight; pure WPF: no browser runtime. Switchable. Default WebView2.",
+			"WebView2：Mermaid/強調表示が充実；純 WPF：ブラウザ不要。切替可。既定 WebView2。",
+			"WebView2: Mermaid/강조 우수; 순수 WPF: 브라우저 불필요. 전환 가능. 기본 WebView2.");
+		a("md_preview_webview", "WebView2（HTML）", "WebView2 (HTML)", "WebView2（HTML）", "WebView2 (HTML)");
+		a("md_preview_wpf", "纯 WPF", "Pure WPF", "純 WPF", "순수 WPF");
 		a("lang_section", "界面语言", "UI language", "表示言語", "표시 언어");
 		a("lang_hint", "切换后立即生效并保存。支持中文、English、日本語、한국어。",
 			"Applies and saves immediately. Supports Chinese, English, Japanese, Korean.",

@@ -18,6 +18,7 @@ sealed class SettingsWindow : Window {
 	readonly TextBlock lbmdheadnumhint;
 	readonly ComboBox cbfont;
 	readonly ComboBox cbtab;
+	readonly ComboBox cbmdengine;
 	readonly ComboBox cblang;
 	readonly TextBlock lbtheme;
 	readonly TextBlock lbthemehint;
@@ -28,6 +29,8 @@ sealed class SettingsWindow : Window {
 	readonly TextBlock lbtabsec;
 	readonly TextBlock lbtabhint;
 	readonly TextBlock lbtabsize;
+	readonly TextBlock lbmdengine;
+	readonly TextBlock lbmdenginehint;
 	readonly TextBlock lblangsec;
 	readonly TextBlock lblanghint;
 	readonly TextBlock lbnotes;
@@ -81,6 +84,8 @@ sealed class SettingsWindow : Window {
 				draft.UiFontSize = fs;
 			if (cbtab.SelectedItem is int ts)
 				draft.MdTabSize = ts;
+			if (cbmdengine?.SelectedIndex >= 0)
+				draft.MdPreviewEngine = cbmdengine.SelectedIndex == 1 ? 1 : 0;
 			if (cblang.SelectedItem is LangItem li)
 				draft.Language = li.Code;
 			draft.WinLeft = AppSettings.Current.WinLeft;
@@ -253,6 +258,34 @@ sealed class SettingsWindow : Window {
 		};
 		body.Children.Add(lbmdheadnumhint);
 
+		var engRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+		lbmdengine = new TextBlock {
+			Text = Loc.T("md_preview_engine"),
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(0, 0, 12, 0),
+			Foreground = brushres("TextPrimary") ?? Brushes.Black,
+			FontSize = 13,
+		};
+		engRow.Children.Add(lbmdengine);
+		cbmdengine = new ComboBox {
+			Width = 180,
+			Height = 28,
+			HorizontalAlignment = HorizontalAlignment.Left,
+		};
+		cbmdengine.Items.Add(Loc.T("md_preview_webview"));
+		cbmdengine.Items.Add(Loc.T("md_preview_wpf"));
+		cbmdengine.SelectedIndex = draft.MdPreviewEngine == 1 ? 1 : 0;
+		engRow.Children.Add(cbmdengine);
+		body.Children.Add(engRow);
+		lbmdenginehint = new TextBlock {
+			Text = Loc.T("md_preview_engine_hint"),
+			FontSize = 12,
+			Foreground = brushres("TextMuted") ?? Brushes.Gray,
+			TextWrapping = TextWrapping.Wrap,
+			Margin = new Thickness(0, 0, 0, 8),
+		};
+		body.Children.Add(lbmdenginehint);
+
 		lbnotes = sectiontitle(Loc.T("notes_section"));
 		body.Children.Add(lbnotes);
 		lbnotesbody = new TextBlock {
@@ -305,6 +338,14 @@ sealed class SettingsWindow : Window {
 		if (lbtabsize != null) lbtabsize.Text = Loc.T("md_tab_size");
 		if (ckmdheadnum != null) ckmdheadnum.Content = Loc.T("md_heading_autonum");
 		if (lbmdheadnumhint != null) lbmdheadnumhint.Text = Loc.T("md_heading_autonum_hint");
+		if (lbmdengine != null) lbmdengine.Text = Loc.T("md_preview_engine");
+		if (lbmdenginehint != null) lbmdenginehint.Text = Loc.T("md_preview_engine_hint");
+		if (cbmdengine != null && cbmdengine.Items.Count >= 2) {
+			var idx = cbmdengine.SelectedIndex;
+			cbmdengine.Items[0] = Loc.T("md_preview_webview");
+			cbmdengine.Items[1] = Loc.T("md_preview_wpf");
+			cbmdengine.SelectedIndex = idx >= 0 ? idx : 0;
+		}
 		if (lbnotes != null) lbnotes.Text = Loc.T("notes_section");
 		if (lbnotesbody != null) lbnotesbody.Text = Loc.T("settings_notes");
 		if (bcancel != null) bcancel.Content = Loc.T("cancel");

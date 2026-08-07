@@ -36,6 +36,12 @@ sealed class AppSettings {
 	[DataMember(Name = "mdHeadingAutoNumber")]
 	public bool MdHeadingAutoNumber = true;
 
+	/// <summary>
+	/// Markdown 预览引擎：0=WebView2 HTML（默认，Mermaid/高亮）；1=纯 WPF FlowDocument。
+	/// </summary>
+	[DataMember(Name = "mdPreviewEngine")]
+	public int MdPreviewEngine = 0;
+
 	/// <summary>界面语言：zh / en / ja / ko。</summary>
 	[DataMember(Name = "language")]
 	public string Language = "zh";
@@ -120,6 +126,8 @@ sealed class AppSettings {
 		UiFontSize = Math.Round(UiFontSize * 2) / 2;
 		if (MdTabSize < 1) MdTabSize = 1;
 		if (MdTabSize > 8) MdTabSize = 8;
+		if (MdPreviewEngine < 0) MdPreviewEngine = 0;
+		if (MdPreviewEngine > 1) MdPreviewEngine = 1;
 		Language = normalizeLang(Language);
 	}
 
@@ -143,6 +151,7 @@ sealed class AppSettings {
 			UiFontSize = UiFontSize,
 			MdTabSize = MdTabSize,
 			MdHeadingAutoNumber = MdHeadingAutoNumber,
+			MdPreviewEngine = MdPreviewEngine,
 			Language = Language,
 			WinLeft = WinLeft,
 			WinTop = WinTop,
@@ -161,6 +170,7 @@ sealed class AppSettings {
 		UiFontSize = s.UiFontSize;
 		MdTabSize = s.MdTabSize;
 		MdHeadingAutoNumber = s.MdHeadingAutoNumber;
+		MdPreviewEngine = s.MdPreviewEngine;
 		Language = s.Language;
 		WinLeft = s.WinLeft;
 		WinTop = s.WinTop;

@@ -9,6 +9,11 @@
 *TODO*.md
 *.7z
 
+# IDE / agent local state
+.cursor/
+.claude/
+.idea/
+
 # Build outputs
 [Bb]in/
 [Oo]bj/
@@ -60,6 +65,10 @@ tmp/
 *.log
 *.pdb
 
+# Release packages (7z); do not upload
+/release/
+*.7z
+
 # OS junk
 .DS_Store
 Thumbs.db
@@ -99,10 +108,11 @@ appsettings.*.local.json
 *.docx
 *.xlsx
 !DocviewWPF/Assets/**
+# Offline preview JS/CSS under Assets must stay trackable (not matched by rules above)
 # If you need sample fixtures in-repo later, place under samples/ and force-add:
 # !samples/**
 
-# JetBrains / Resharper
+# JetBrains / ReSharper
 _ReSharper*/
 *.[Rr]e[Ss]harper
 *.DotSettings.user

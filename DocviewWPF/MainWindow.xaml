@@ -146,6 +146,34 @@
 									</ContextMenu>
 								</Button.ContextMenu>
 							</Button>
+							<!-- 系统参数 -->
+							<Button x:Name="bsettings"
+							        ToolTip="系统参数 (Ctrl+,)"
+							        Width="32" Height="24" Margin="0,2,2,2"
+							        Padding="0" Cursor="Hand" VerticalAlignment="Center"
+							        Background="Transparent" BorderThickness="0"
+							        Foreground="{DynamicResource TextMuted}"
+							        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+								<Button.Template>
+									<ControlTemplate TargetType="Button">
+										<Border x:Name="bd" Background="{TemplateBinding Background}"
+										        CornerRadius="6" Padding="0">
+											<ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+										</Border>
+										<ControlTemplate.Triggers>
+											<Trigger Property="IsMouseOver" Value="True">
+												<Setter TargetName="bd" Property="Background" Value="{DynamicResource CapBtnHover}"/>
+												<Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+											</Trigger>
+										</ControlTemplate.Triggers>
+									</ControlTemplate>
+								</Button.Template>
+								<Path Width="14" Height="14" Stretch="Uniform"
+								      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+								      StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+								      StrokeLineJoin="Round" Fill="Transparent"
+								      Data="M10,7.5 a2.5,2.5 0 1 1 0,5 a2.5,2.5 0 1 1 0,-5 M10,4.5 v1.5 M10,14 v1.5 M6.9,6.9 l1.05,1.05 M13.1,13.1 l1.05,1.05 M5,10 h1.5 M15.5,10 H14 M6.9,13.1 l1.05,-1.05 M13.1,6.9 l1.05,-1.05"/>
+							</Button>
 						</StackPanel>
 					</Grid>
 
@@ -269,6 +297,22 @@
 						<Path Style="{StaticResource ToolIconPath}"
 						      Data="M5,4 h11 l3,3 v12 a1,1 0 0 1 -1,1 h-13 a1,1 0 0 1 -1,-1 v-14 a1,1 0 0 1 1,-1 M8,4 v5 h8 v-5 M8,20 v-6 h8 v6"/>
 					</Button>
+					<!-- MD 预览引擎：WebView2 / 纯 WPF（MD 标签时显示） -->
+					<StackPanel x:Name="pmdengine" Orientation="Horizontal" VerticalAlignment="Center"
+					            Margin="6,0,0,0" Visibility="Collapsed">
+						<ToggleButton x:Name="bmdweb" Style="{StaticResource ToolIconToggle}"
+						              ToolTip="WebView2 预览（Mermaid / 语法高亮）">
+							<!-- 地球/浏览器 -->
+							<Path Style="{StaticResource ToolIconPath}"
+							      Data="M12,4 a8,8 0 1 0 0.01,0 M4,12 h16 M12,4 c-2.5,2.5 -3.5,5.5 -3.5,8 s1,5.5 3.5,8 c2.5,-2.5 3.5,-5.5 3.5,-8 s-1,-5.5 -3.5,-8"/>
+						</ToggleButton>
+						<ToggleButton x:Name="bmdwpf" Style="{StaticResource ToolIconToggle}" Margin="2,0,0,0"
+						              ToolTip="纯 WPF 预览（无浏览器内核）">
+							<!-- 文档层叠 -->
+							<Path Style="{StaticResource ToolIconPath}"
+							      Data="M6,5 h10 v12 h-10 z M8,3 h10 v2 M8,17 h2 v2 h10 v-12 h-2"/>
+						</ToggleButton>
+					</StackPanel>
 					<!-- XLSX 编辑入口（Toggle：编辑中按下态） -->
 					<ToggleButton x:Name="bxlsxedit" Style="{StaticResource ToolIconToggle}" Margin="8,0,0,0"
 					              ToolTip="编辑表格" Visibility="Collapsed">

@@ -22,11 +22,13 @@ public partial class App : Application {
 			return;
 		}
 
-		// 命令行自检：不进 UI，验证 TXT/MD 真实入口后退出
+		// 命令行自检：不进主窗，验证后退出
 		if (SelfTest.IsSelfTestArg(e.Args)) {
 			try {
 				int n;
-				if (SelfTest.IsTyporaClickArg(e.Args))
+				if (SelfTest.IsConsoleArg(e.Args))
+					n = SelfTest.RunConsole(Console.Out);
+				else if (SelfTest.IsTyporaClickArg(e.Args))
 					n = SelfTest.RunTyporaClickPerf(Console.Out);
 				else
 					n = SelfTest.RunMd(Console.Out);
