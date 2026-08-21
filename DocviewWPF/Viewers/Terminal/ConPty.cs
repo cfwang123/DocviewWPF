@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -116,23 +117,33 @@ sealed class ConPtySession : IDisposable {
 		var tSec = new SecurityAttributes { nLength = Marshal.SizeOf(typeof(SecurityAttributes)) };
 		var cwd = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory;
 
-		var ok = CreateProcessW(
-			null,
-			cmdBuf,
-			ref pSec,
-			ref tSec,
-			false,
-			EXTENDED_STARTUPINFO_PRESENT,
-			IntPtr.Zero,
-			cwd,
-			ref siEx,
-			out var pi);
-		if (!ok)
-			throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcess " + cmdLine);
+		// 继承环境并强制 TERM/COLORTERM，便于 nvim 等启用 256 色 / truecolor
+		var envPtr = IntPtr.Zero;
+		try {
+			envPtr = buildenvblock();
+			const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+			var ok = CreateProcessW(
+				null,
+				cmdBuf,
+				ref pSec,
+				ref tSec,
+				false,
+				EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+				envPtr,
+				cwd,
+				ref siEx,
+				out var pi);
+			if (!ok)
+				throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcess " + cmdLine);
 
-		hProcess = pi.hProcess;
-		hThread = pi.hThread;
-		ProcessId = pi.dwProcessId;
+			hProcess = pi.hProcess;
+			hThread = pi.hThread;
+			ProcessId = pi.dwProcessId;
+		} finally {
+			if (envPtr != IntPtr.Zero) {
+				try { Marshal.FreeHGlobal(envPtr); } catch { /* ignore */ }
+			}
+		}
 		// 属性列表可在 CreateProcess 返回后释放
 		freeattr();
 		CloseHandle(hThread);
@@ -180,6 +191,34 @@ sealed class ConPtySession : IDisposable {
 		if (string.IsNullOrEmpty(p)) return "\"\"";
 		if (p.IndexOf(' ') < 0) return p;
 		return "\"" + p + "\"";
+	}
+
+	/// <summary>
+	/// Unicode 环境块（KEY=VAL\0...\0\0），在父进程环境上覆盖 TERM/COLORTERM。
+	/// </summary>
+	static IntPtr buildenvblock() {
+		var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		try {
+			foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables()) {
+				var k = e.Key as string;
+				var v = e.Value as string;
+				if (k != null) map[k] = v ?? "";
+			}
+		} catch { /* ignore */ }
+		map["TERM"] = "xterm-256color";
+		map["COLORTERM"] = "truecolor";
+		// 去掉可能导致子进程仍绑父控制台的变量（若有）
+		var sb = new StringBuilder(map.Count * 32);
+		foreach (var kv in map) {
+			if (string.IsNullOrEmpty(kv.Key)) continue;
+			if (kv.Key.IndexOf('=') >= 0) continue;
+			sb.Append(kv.Key).Append('=').Append(kv.Value ?? "").Append('\0');
+		}
+		sb.Append('\0');
+		var bytes = Encoding.Unicode.GetBytes(sb.ToString());
+		var ptr = Marshal.AllocHGlobal(bytes.Length);
+		Marshal.Copy(bytes, 0, ptr, bytes.Length);
+		return ptr;
 	}
 
 	void readloop() {

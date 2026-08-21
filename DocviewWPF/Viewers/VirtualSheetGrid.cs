@@ -345,29 +345,20 @@ sealed class VirtualSheetGrid : UserControl {
 		filterHdrRow = -1;
 		filterR0 = filterR1 = filterC0 = filterC1 = -1;
 		if (model == null || rows <= 0 || cols <= 0) return;
-		if (model.HasFilterRange) {
-			filterHdrRow = model.FilterR0;
-			filterR0 = model.FilterR0;
-			filterR1 = Math.Min(model.FilterR1, rows - 1);
-			filterC0 = Math.Max(0, model.FilterC0);
-			filterC1 = Math.Min(model.FilterC1, cols - 1);
-		} else {
-			// 默认：冻结底行或第 0 行为表头，以下为数据
-			filterHdrRow = freezeRows > 0 ? freezeRows - 1 : 0;
-			if (filterHdrRow >= rows) filterHdrRow = 0;
-			filterR0 = filterHdrRow;
-			filterR1 = rows - 1;
-			filterC0 = 0;
-			filterC1 = cols - 1;
-		}
-		// 有冻结时：筛选/排序按钮固定钉在冻结底行（Excel 表头行），数据区至少到表尾
-		if (freezeRows > 0 && freezeRows <= rows) {
+		// 仅当工作表自带 AutoFilter（HasFilterRange）时显示筛选，勿默认第 0 行
+		// （装箱清单等：第 1 行是合并标题，真正表头在更下方）
+		if (!model.HasFilterRange) return;
+
+		filterHdrRow = model.FilterR0;
+		filterR0 = model.FilterR0;
+		filterR1 = Math.Min(model.FilterR1, rows - 1);
+		filterC0 = Math.Max(0, model.FilterC0);
+		filterC1 = Math.Min(model.FilterC1, cols - 1);
+
+		// 有冻结且筛选表头落在冻结区内：按钮钉在冻结底行
+		if (freezeRows > 0 && freezeRows <= rows && filterHdrRow >= 0 && filterHdrRow < freezeRows) {
 			filterHdrRow = freezeRows - 1;
 			filterR0 = filterHdrRow;
-			if (filterC0 < 0 || filterC1 < filterC0) {
-				filterC0 = 0;
-				filterC1 = cols - 1;
-			}
 		}
 		// AutoFilter 有时只写表头一行 → 扩展到全部数据行
 		if (filterHdrRow >= 0 && filterR1 <= filterHdrRow && rows > filterHdrRow + 1)

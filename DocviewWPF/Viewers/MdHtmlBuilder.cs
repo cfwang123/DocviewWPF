@@ -248,6 +248,9 @@ static class MdHtmlBuilder {
 		sb.Append("blockquote{margin:.75em 0 1em;padding:.55em 1em .55em 1em;border-left:4px solid #9ca3af;");
 		sb.Append("background:#f3f4f6;color:#4b5563;font-style:italic;}");
 		sb.Append("hr{border:0;border-top:2px solid #d1d5db;margin:1.25em 0;width:100%;}");
+		// 源码 \\t 显示宽度与设置 MdTabSize 一致
+		sb.Append("body,pre,code,p,li,td,th{tab-size:").Append(tabSize)
+			.Append(";-moz-tab-size:").Append(tabSize).Append(";}");
 		sb.Append("ul,ol{margin:.2em 0 .8em;padding-left:").Append(tabSize)
 			.Append("em;}li{margin:.15em 0;}");
 		// 列表项：margin-left 按 indent_cols×0.6em（见 Build）；mdind 作像素兜底

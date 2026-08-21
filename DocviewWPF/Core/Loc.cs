@@ -206,10 +206,10 @@ static class Loc {
 		a("clear_recent", "清除全部最近文件", "Clear recent files", "最近のファイルをすべて消去", "최근 파일 모두 지우기");
 		a("no_file", "当前没有打开的文件。", "No file is open.", "ファイルが開かれていません。", "열린 파일이 없습니다.");
 		a("no_print", "没有可打印的文档。", "Nothing to print.", "印刷できる文書がありません。", "인쇄할 문서가 없습니다.");
-		a("unsupported_type", "不支持的文件类型:\n{0}\n\n支持: .pdf .docx .xlsx .txt .md / 代码 / 图片",
-			"Unsupported file type:\n{0}\n\nSupported: .pdf .docx .xlsx .txt .md / code / images",
-			"未対応の種類:\n{0}\n\n対応: .pdf .docx .xlsx .txt .md / コード / 画像",
-			"지원하지 않는 형식:\n{0}\n\n지원: .pdf .docx .xlsx .txt .md / 코드 / 이미지");
+		a("unsupported_type", "不支持的文件类型:\n{0}\n\n支持: .pdf .doc .docx .xls .xlsx .txt .md / 代码 / 图片",
+			"Unsupported file type:\n{0}\n\nSupported: .pdf .doc .docx .xls .xlsx .txt .md / code / images",
+			"未対応の種類:\n{0}\n\n対応: .pdf .doc .docx .xls .xlsx .txt .md / コード / 画像",
+			"지원하지 않는 형식:\n{0}\n\n지원: .pdf .doc .docx .xls .xlsx .txt .md / 코드 / 이미지");
 		a("file_missing", "文件不存在:\n{0}", "File not found:\n{0}", "ファイルがありません:\n{0}", "파일이 없습니다:\n{0}");
 		a("file_missing_removed", "文件不存在，已从最近列表移除:\n{0}",
 			"File missing; removed from recent:\n{0}",
@@ -280,10 +280,10 @@ static class Loc {
 			"메뉴·도구 모음·목차 등(기본 12). 문서 본문 크기는 변경하지 않습니다.");
 		a("font_size_px", "字号（px）", "Size (px)", "サイズ (px)", "크기 (px)");
 		a("md_tab_section", "Markdown Tab", "Markdown Tab", "Markdown Tab", "Markdown Tab");
-		a("md_tab_hint", "Tab 显示宽度（字符）。打开时将围栏外 Tab 展成空格；改宽度时按层级重算行首缩进。编辑 Tab 键插入空格。默认 3。",
-			"Tab width (chars). Tabs outside fences expand on open; changing width retargets leading indent. Tab key inserts spaces. Default 3.",
-			"Tab 表示幅（文字数）。フェンス外 Tab は開く時に展開；幅変更で行頭インデントを再計算。Tab は空白挿入。既定 3。",
-			"Tab 너비(문자). 펜스 밖 Tab은 열 때 전개; 너비 변경 시 행 머리 들여쓰기 재계산. Tab은 공백 삽입. 기본 3.");
+		a("md_tab_hint", "Tab 宽度（字符）。源码与选择均为单个 \\t（不会变成多个空格）；显示占此列宽。列表缩进与预览 tab-size 同步。默认 3。",
+			"Tab width (chars). Source and selection are a single \\t (never multiple spaces); display uses this column width. List indent and preview tab-size match. Default 3.",
+			"Tab 幅（文字数）。ソースと選択は単一の \\t（空白にならない）；表示幅はこの桁数。リストとプレビュー tab-size 連動。既定 3。",
+			"Tab 너비(문자). 원본·선택은 단일 \\t(공백으로 변하지 않음); 표시는 이 칸 너비. 목록·미리보기 tab-size 동기. 기본 3.");
 		a("md_tab_size", "宽度（字符）", "Width (chars)", "幅（文字）", "너비(문자)");
 		a("md_heading_autonum", "标题自动编号", "Auto-number headings", "見出しの自動番号", "제목 자동 번호");
 		a("md_heading_autonum_hint", "启用后在预览与目录中为标题加 1 / 1.1 / 1.1.1 编号（不修改源文件）。默认开启。",

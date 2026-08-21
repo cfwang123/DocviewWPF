@@ -1092,6 +1092,60 @@ static class SelfTest {
 					}
 					try { term.DisposeResources(); } catch { /* ignore */ }
 					try { win.Close(); } catch { /* ignore */ }
+
+					// ConsoleViewer 整页截图：IME 聚焦 + 提示符后应无闪烁光标
+					var win2 = new System.Windows.Window {
+						Title = "selftest-console-full",
+						Width = 1100,
+						Height = 640,
+						WindowStartupLocation = System.Windows.WindowStartupLocation.Manual,
+						Left = 60,
+						Top = 60,
+						ShowInTaskbar = false,
+						Background = System.Windows.Media.Brushes.Black,
+					};
+					var cv = new ConsoleViewer();
+					win2.Content = cv.View;
+					win2.Show();
+					pumpui(120);
+					cv.View.Measure(new System.Windows.Size(1060, 580));
+					cv.View.Arrange(new System.Windows.Rect(0, 0, 1060, 580));
+					// 提示符停在行末（光标应在 > 后）；CSI ?25h 开光标
+					var banner2 =
+						"\x1b[2J\x1b[m\x1b[H\x1b[?25h" +
+						"Microsoft Windows [版本 10.0.19045.6466]\r\n" +
+						"(c) Microsoft Corporation。保留所有权利。\r\n" +
+						"\r\n" +
+						@"D:\VS_Projects\学习\leetcode>";
+					cv.FeedVtForTest(Encoding.UTF8.GetBytes(banner2));
+					pumpui(80);
+					// 模拟 shell 回显字母（验证光标跟在字后，而非飘到右侧）
+					cv.FeedVtForTest(Encoding.UTF8.GetBytes("abcdef"));
+					pumpui(60);
+					cv.PrepareImeFocusForTest();
+					pumpui(120);
+					var fullPng = cv.CaptureFullPngForTest();
+					var termPng = cv.CapturePngForTest();
+					var afterType = cv.DumpScreenTextForTest() ?? "";
+					try {
+						var local = Path.Combine(
+							Path.GetDirectoryName(typeof(SelfTest).Assembly.Location) ?? ".",
+							"..", "..", "..", "..", "tmp");
+						local = Path.GetFullPath(local);
+						Directory.CreateDirectory(local);
+						if (fullPng != null)
+							File.WriteAllBytes(Path.Combine(local, "console_input_full.png"), fullPng);
+						if (termPng != null)
+							File.WriteAllBytes(Path.Combine(local, "console_input_term.png"), termPng);
+						File.WriteAllText(Path.Combine(local, "console_input.txt"), afterType, new UTF8Encoding(false));
+						info("shot.full=" + Path.Combine(local, "console_input_full.png"));
+						info("shot.term=" + Path.Combine(local, "console_input_term.png"));
+						info("shot.afterType has abcdef=" + (afterType.IndexOf("abcdef", StringComparison.Ordinal) >= 0));
+					} catch (Exception ex3) {
+						info("shot.full fail " + ex3.Message);
+					}
+					try { cv.Dispose(); } catch { /* ignore */ }
+					try { win2.Close(); } catch { /* ignore */ }
 				} catch (Exception ex) {
 					shotEx = ex;
 				}
@@ -1099,7 +1153,7 @@ static class SelfTest {
 			});
 			thrShot.SetApartmentState(System.Threading.ApartmentState.STA);
 			thrShot.Start();
-			if (!thrShot.Join(30000))
+			if (!thrShot.Join(45000))
 				bad("shot.banner", "timeout");
 			else if (shotEx != null)
 				bad("shot.banner", shotEx.ToString());

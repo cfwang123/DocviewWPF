@@ -65,6 +65,8 @@ sealed class MdViewer : IDocViewer {
 	const string IMG_PREVIEW_TAG = "mdimg-ui";
 	/// <summary>Typora 折叠表：Table.Tag = mdtbl:原始多行源码（含 sep）。</summary>
 	const string TBL_TAG_PREFIX = "mdtbl:";
+	/// <summary>显示层 Tab：Run.Text 为 MdTabSize 列空格，Tag=mdtab，导出为单个 \\t。</summary>
+	const string TAB_TAG = "mdtab";
 
 	struct TableRange {
 		public int A;
@@ -477,11 +479,11 @@ sealed class MdViewer : IDocViewer {
 		FilePath = System.IO.Path.GetFullPath(path);
 		Title = System.IO.Path.GetFileName(path);
 		fileEnc = r.Encoding ?? new UTF8Encoding(false);
-		// WPF RTB 无法改 \\t 显示宽：按 MdTabSize 展成空格后再进编辑器
+		// 保留源码 \\t（一个 Tab 就是一个 Tab，不展成多个空格；缩进层级由 IndentCols/MdTabSize 解析）
 		var tab = AppSettings.Current?.MdTabSize ?? 3;
 		if (tab < 1) tab = 1;
 		appliedTabSize = tab;
-		rawText = MdParser.ExpandTabs(r.Text ?? "", tab);
+		rawText = r.Text ?? "";
 		clearundostacks();
 		suppressText = true;
 		try {
@@ -515,7 +517,7 @@ sealed class MdViewer : IDocViewer {
 		var tab = AppSettings.Current?.MdTabSize ?? 3;
 		if (tab < 1) tab = 1;
 		appliedTabSize = tab;
-		rawText = MdParser.ExpandTabs(r.Text ?? "", tab);
+		rawText = r.Text ?? "";
 		invalidatelinecache();
 		clearundostacks();
 		suppressText = true;
@@ -1666,33 +1668,112 @@ sealed class MdViewer : IDocViewer {
 		return Path.Combine(dir, timestampimgname(ext));
 	}
 
-	/// <summary>按 MdTabSize 插入空格至下一制表位（软 Tab，源码区显示宽度与设置一致）。</summary>
-	string softtabinsert() {
-		var tabSize = AppSettings.Current?.MdTabSize ?? 3;
-		if (tabSize < 1) tabSize = 1;
+	/// <summary>插入字面量 \\t（源码与选择均为单个 Tab 单元）。</summary>
+	string softtabinsert() => "\t";
+
+	int mdtabsize() {
+		var t = AppSettings.Current?.MdTabSize ?? appliedTabSize;
+		if (t < 1) t = 1;
+		if (t > 8) t = 8;
+		return t;
+	}
+
+	/// <summary>
+	/// 源码行 → 逻辑显示比较串：每个 \\t 用一个占位符（\\uFFFC），与 RTB 中 mdtab 控件一一对应，
+	/// 绝不用多个空格代替 Tab。
+	/// </summary>
+	string displayline(string rawLine) {
+		if (string.IsNullOrEmpty(rawLine) || rawLine.IndexOf('\t') < 0)
+			return rawLine ?? "";
+		// 与 appendwithtabs 一致：一个 Tab → 一个选择单元
+		return rawLine.Replace("\t", "\uFFFC");
+	}
+
+	double measuremonocharwidth() {
 		try {
-			if (!suppressText) {
-				var cur = getsourceplain();
-				if (cur != null) rawText = cur;
+			var fs = sourceBox?.FontSize ?? BASE_FONT;
+			if (fs < 1) fs = BASE_FONT;
+			var ff = sourceBox?.FontFamily
+				?? new FontFamily("Consolas, Cascadia Mono, 微软雅黑, monospace");
+			var typeface = new Typeface(ff, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+			double ppd = 1.0;
+			try {
+				if (sourceBox != null && sourceBox.IsLoaded)
+					ppd = VisualTreeHelper.GetDpi(sourceBox).PixelsPerDip;
+			} catch { ppd = 1.0; }
+			var ft = new System.Windows.Media.FormattedText(
+				"0",
+				System.Globalization.CultureInfo.CurrentCulture,
+				FlowDirection.LeftToRight,
+				typeface,
+				fs,
+				Brushes.Black,
+				ppd);
+			var w = ft.WidthIncludingTrailingWhitespace;
+			if (w > 0.5) return w;
+		} catch { /* ignore */ }
+		return Math.Max(4.0, (sourceBox?.FontSize ?? BASE_FONT) * 0.6);
+	}
+
+	/// <summary>单个 Tab 的显示控件：宽度 = MdTabSize×字宽，空白无颜色，选择时为 1 个单元。</summary>
+	InlineUIContainer maketabinline() {
+		var tabSize = mdtabsize();
+		var fs = sourceBox?.FontSize ?? BASE_FONT;
+		var w = Math.Max(2.0, measuremonocharwidth() * tabSize);
+		var h = Math.Max(fs * 1.15, 12);
+		// 透明占位：仅保宽度，不着色
+		var bar = new Border {
+			Width = w,
+			Height = h,
+			Background = Brushes.Transparent,
+			BorderThickness = new Thickness(0),
+			SnapsToDevicePixels = true,
+			IsHitTestVisible = true,
+			Tag = TAB_TAG,
+		};
+		return new InlineUIContainer(bar) {
+			Tag = TAB_TAG,
+			BaselineAlignment = BaselineAlignment.Center,
+		};
+	}
+
+	/// <summary>
+	/// 写入 Inlines：每个 \\t → 一个 mdtab 控件（宽=MdTabSize 列，选中为 1 单元）；
+	/// 不含空格展开。导出/保存时 mdtab → \\t。
+	/// </summary>
+	void appendwithtabs(InlineCollection inlines, string text, Brush fg = null, FontWeight? weight = null, double fontSize = 0) {
+		if (inlines == null) return;
+		text ??= "";
+		if (text.IndexOf('\t') < 0) {
+			if (text.Length == 0) {
+				inlines.Add(new Run(""));
+				return;
 			}
-		} catch { /* keep */ }
-		var text = rawText ?? "";
-		getselectionoffsets(out var a, out var _);
-		if (a < 0) a = 0;
-		if (a > text.Length) a = text.Length;
-		var lineStart = 0;
-		for (var i = a - 1; i >= 0; i--) {
-			if (text[i] == '\n') { lineStart = i + 1; break; }
+			var r0 = new Run(text);
+			if (fg != null) r0.Foreground = fg;
+			if (weight != null) r0.FontWeight = weight.Value;
+			if (fontSize > 0) r0.FontSize = fontSize;
+			inlines.Add(r0);
+			return;
 		}
-		var prefix = text.Substring(lineStart, a - lineStart);
-		var col = 0;
-		foreach (var ch in prefix) {
-			if (ch == '\t') col += tabSize - (col % tabSize);
-			else col++;
+		var buf = new StringBuilder();
+		void flushplain() {
+			if (buf.Length == 0) return;
+			var r = new Run(buf.ToString());
+			if (fg != null) r.Foreground = fg;
+			if (weight != null) r.FontWeight = weight.Value;
+			if (fontSize > 0) r.FontSize = fontSize;
+			inlines.Add(r);
+			buf.Clear();
 		}
-		var n = tabSize - (col % tabSize);
-		if (n <= 0) n = tabSize;
-		return new string(' ', n);
+		foreach (var ch in text) {
+			if (ch == '\t') {
+				flushplain();
+				inlines.Add(maketabinline());
+			} else
+				buf.Append(ch);
+		}
+		flushplain();
 	}
 
 	void insertplaintext(string insert) {
@@ -1909,6 +1990,7 @@ sealed class MdViewer : IDocViewer {
 
 		bool lineeq(int oi, int ni) {
 			var want = lines[ni] ?? "";
+			// mdtab 导出为 \\t，与 raw 行比较
 			bool sameText;
 			if (oldLinesSnap != null && oi >= 0 && oi < oldLinesSnap.Count)
 				sameText = string.Equals(oldLinesSnap[oi] ?? "", want, StringComparison.Ordinal);
@@ -1944,11 +2026,7 @@ sealed class MdViewer : IDocViewer {
 
 		// 插入新中间段（仅这些行重绘高亮）
 		for (var i = pref; i < newMidEnd; i++) {
-			var p = new Paragraph {
-				Margin = new Thickness(0),
-				Padding = new Thickness(0),
-				LineHeight = lh,
-			};
+			var p = makesourcepara(lh);
 			fillsourceline(p, lines, i, showRaw: true);
 			var insertIdx = i;
 			if (insertIdx >= paras.Count) {
@@ -1961,10 +2039,9 @@ sealed class MdViewer : IDocViewer {
 		}
 
 		if (newN == 0 && paras.Count == 0) {
-			blocks.Add(new Paragraph(new Run("")) {
-				Margin = new Thickness(0),
-				LineHeight = lh,
-			});
+			var emptyP = makesourcepara(lh);
+			emptyP.Inlines.Add(new Run(""));
+			blocks.Add(emptyP);
 		}
 		invalidateparacache();
 		return true;
@@ -1975,7 +2052,7 @@ sealed class MdViewer : IDocViewer {
 		return arr[i];
 	}
 
-	/// <summary>段落可见纯文本（简单编辑无 conceal Tag 时即源码）。</summary>
+	/// <summary>段落逻辑源码（mdtab→\\t；conceal 标记还原）。</summary>
 	static string paragraphplaintext(Paragraph p) {
 		if (p == null) return "";
 		try {
@@ -2108,13 +2185,12 @@ sealed class MdViewer : IDocViewer {
 							return offsetofline(text, line);
 						var baseOff = offsetofline(text, line);
 						var lines = getlinescached();
-						var maxLocal = (lines != null && line < lines.Count)
-							? (lines[line] ?? "").Length
-							: int.MaxValue;
+						var rawLine = (lines != null && line < lines.Count) ? (lines[line] ?? "") : "";
+						var maxLocal = rawLine.Length;
 						if (tp.CompareTo(p.ContentEnd) >= 0)
-							return baseOff + (maxLocal == int.MaxValue ? 0 : maxLocal);
-						var tr = new TextRange(p.ContentStart, tp);
-						var local = (tr.Text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Length;
+							return baseOff + maxLocal;
+						// mdtab 控件在 TextRange.Text 中为 \\uFFFC（1 单元 = 1 个 \\t）
+						var local = countlogicalchars(p.ContentStart, tp);
 						if (local > maxLocal) local = maxLocal;
 						return baseOff + local;
 					}
@@ -2330,11 +2406,7 @@ sealed class MdViewer : IDocViewer {
 		// 增不足
 		while (paras.Count < lines.Count) {
 			var i = Math.Min(focusLine, paras.Count);
-			var p = new Paragraph {
-				Margin = new Thickness(0),
-				Padding = new Thickness(0),
-				LineHeight = lh,
-			};
+			var p = makesourcepara(lh);
 			var li = Math.Min(i, lines.Count - 1);
 			if (li < 0) li = 0;
 			fillsourceline(p, lines, li, showRaw: true);
@@ -3028,20 +3100,37 @@ sealed class MdViewer : IDocViewer {
 			var sb = new StringBuilder(Math.Max(256, (rawText?.Length ?? 0) + 64));
 			var first = true;
 			var simple = usesimpleeditor;
+			// 未改动的行：用 raw 保留 \\t（显示层已按 MdTabSize 展成空格）
+			var rawLines = MdParser.SplitLines(rawText ?? "");
+			var tab = mdtabsize();
+			var lineIdx = 0;
 			foreach (var block in doc.Blocks) {
 				if (block is Paragraph p) {
 					if (!first) sb.Append('\n');
 					first = false;
+					var rtbSb = new StringBuilder();
 					if (simple)
-						appendsimpleplain(sb, p.Inlines);
+						appendsimpleplain(rtbSb, p.Inlines);
 					else
-						appendsourceinlines(sb, p.Inlines);
+						appendsourceinlines(rtbSb, p.Inlines);
+					var rtbLine = rtbSb.ToString();
+					var rawLine = lineIdx < rawLines.Count ? (rawLines[lineIdx] ?? "") : null;
+					// mdtab 导出为 \\t，与 raw 直接比较（不再用空格展宽串）
+					if (rawLine != null
+						&& string.Equals(rawLine, rtbLine, StringComparison.Ordinal))
+						sb.Append(rawLine);
+					else
+						sb.Append(rtbLine);
+					lineIdx++;
 				} else if (block is Table tbl) {
 					var tag = tbl.Tag as string;
 					if (tag != null && tag.StartsWith(TBL_TAG_PREFIX, StringComparison.Ordinal)) {
 						if (!first) sb.Append('\n');
 						first = false;
 						sb.Append(tag, TBL_TAG_PREFIX.Length, tag.Length - TBL_TAG_PREFIX.Length);
+						// 折叠表占多行
+						var n = tablelinecountfromtag(tag);
+						lineIdx += n;
 					}
 				}
 			}
@@ -3051,23 +3140,40 @@ sealed class MdViewer : IDocViewer {
 		}
 	}
 
-	/// <summary>纯代码：只拼 Run 文本，不做 conceal Tag 还原（更快）。</summary>
+	/// <summary>纯代码：Run 文本；mdtab 控件 → \\t。</summary>
 	static void appendsimpleplain(StringBuilder sb, InlineCollection inlines) {
 		if (sb == null || inlines == null) return;
 		foreach (var inl in inlines) {
-			if (inl is Run r)
-				sb.Append(r.Text);
-			else if (inl is Span sp)
+			if (inl is Run r) {
+				if (r.Tag as string == TAB_TAG)
+					sb.Append('\t');
+				else {
+					var t = r.Text ?? "";
+					// 不应再有空格伪 Tab；裸 \\t 仍按 1 个导出
+					foreach (var ch in t)
+						sb.Append(ch == '\t' ? '\t' : ch);
+				}
+			} else if (inl is InlineUIContainer ui) {
+				var tag = ui.Tag as string;
+				if (tag == TAB_TAG)
+					sb.Append('\t');
+				else if (tag != null && tag.StartsWith(IMG_TAG_PREFIX, StringComparison.Ordinal))
+					sb.Append(tag, IMG_TAG_PREFIX.Length, tag.Length - IMG_TAG_PREFIX.Length);
+			} else if (inl is Span sp)
 				appendsimpleplain(sb, sp.Inlines);
 		}
 	}
 
-	/// <summary>导出 Inlines：mdm: / mdm-ul 还原标记；mdimg 还原 ![…](…)。</summary>
+	/// <summary>导出 Inlines：mdtab 控件→\\t；mdm: / mdm-ul 还原标记；mdimg 还原 ![…](…)。</summary>
 	static void appendsourceinlines(StringBuilder sb, InlineCollection inlines) {
 		if (sb == null || inlines == null) return;
 		foreach (var inl in inlines) {
 			if (inl is Run r) {
 				var tag = r.Tag as string;
+				if (tag == TAB_TAG) {
+					sb.Append('\t');
+					continue;
+				}
 				if (tag != null && tag.StartsWith(LIST_UL_TAG_PREFIX, StringComparison.Ordinal)) {
 					// 列表符被编辑拆 Run 后以 Text 为准（非 ●）
 					var raw = tag.Substring(LIST_UL_TAG_PREFIX.Length);
@@ -3089,10 +3195,14 @@ sealed class MdViewer : IDocViewer {
 						sb.Append(raw);
 					continue;
 				}
-				sb.Append(r.Text);
+				var t = r.Text ?? "";
+				foreach (var ch in t)
+					sb.Append(ch == '\t' ? '\t' : ch);
 			} else if (inl is InlineUIContainer ui) {
 				var tag = ui.Tag as string;
-				if (tag != null && tag.StartsWith(IMG_TAG_PREFIX, StringComparison.Ordinal))
+				if (tag == TAB_TAG)
+					sb.Append('\t');
+				else if (tag != null && tag.StartsWith(IMG_TAG_PREFIX, StringComparison.Ordinal))
 					sb.Append(tag, IMG_TAG_PREFIX.Length, tag.Length - IMG_TAG_PREFIX.Length);
 			} else if (inl is Span sp) {
 				appendsourceinlines(sb, sp.Inlines);
@@ -3122,18 +3232,15 @@ sealed class MdViewer : IDocViewer {
 		};
 		var lines = MdParser.SplitLines(text);
 		if (lines.Count == 0) {
-			fd.Blocks.Add(new Paragraph(new Run("")) {
-				Margin = new Thickness(0),
-				Padding = new Thickness(0),
-				LineHeight = lh,
-			});
+			var p = makesourcepara(lh);
+			p.Inlines.Add(new Run(""));
+			fd.Blocks.Add(p);
 		} else {
 			for (var i = 0; i < lines.Count; i++) {
-				fd.Blocks.Add(new Paragraph(new Run(lines[i] ?? "")) {
-					Margin = new Thickness(0),
-					Padding = new Thickness(0),
-					LineHeight = lh,
-				});
+				var p = makesourcepara(lh);
+				// 显示层：\\t → Tag=mdtab 的对齐空格（宽度=MdTabSize），源码仍为 \\t
+				appendwithtabs(p.Inlines, lines[i] ?? "");
+				fd.Blocks.Add(p);
 			}
 		}
 		// 整文档替换，旧着色树一次性丢弃（比逐段 Delete 快得多）
@@ -3392,7 +3499,8 @@ sealed class MdViewer : IDocViewer {
 			var nav = p.ContentStart;
 			var seen = 0;
 			while (nav != null && nav.CompareTo(p.ContentEnd) < 0) {
-				if (nav.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text) {
+				var ctx = nav.GetPointerContext(LogicalDirection.Forward);
+				if (ctx == TextPointerContext.Text) {
 					var run = nav.GetTextInRun(LogicalDirection.Forward) ?? "";
 					if (seen + run.Length >= localOffset) {
 						sourceBox.CaretPosition = nav.GetPositionAtOffset(localOffset - seen, LogicalDirection.Forward);
@@ -3400,6 +3508,19 @@ sealed class MdViewer : IDocViewer {
 					}
 					seen += run.Length;
 					nav = nav.GetPositionAtOffset(run.Length, LogicalDirection.Forward);
+				} else if (ctx == TextPointerContext.EmbeddedElement) {
+					// mdtab 控件 = 1 逻辑字符
+					if (seen + 1 > localOffset) {
+						sourceBox.CaretPosition = nav;
+						return;
+					}
+					seen += 1;
+					if (seen >= localOffset) {
+						sourceBox.CaretPosition = nav.GetNextContextPosition(LogicalDirection.Forward)
+							?? nav;
+						return;
+					}
+					nav = nav.GetNextContextPosition(LogicalDirection.Forward);
 				} else {
 					nav = nav.GetNextContextPosition(LogicalDirection.Forward);
 				}
@@ -3471,19 +3592,18 @@ sealed class MdViewer : IDocViewer {
 						continue;
 					}
 				}
-				var p = new Paragraph {
-					Margin = new Thickness(0),
-					Padding = new Thickness(0),
-					LineHeight = sourceBox.FontSize * 1.45,
-				};
+				var p = makesourcepara(sourceBox.FontSize * 1.45);
 				var showRaw = !conceal || li == caretLn;
 				fillsourceline(p, lines, li, showRaw);
 				fd.Blocks.Add(p);
 				li++;
 			}
 			var buildMs = Environment.TickCount - tBuild;
-			if (lines.Count == 0)
-				fd.Blocks.Add(new Paragraph(new Run("")) { Margin = new Thickness(0) });
+			if (lines.Count == 0) {
+				var ep = makesourcepara(sourceBox.FontSize * 1.45);
+				ep.Inlines.Add(new Run(""));
+				fd.Blocks.Add(ep);
+			}
 			sourceBox.Document = fd;
 			invalidateparacache();
 			// 按逻辑偏移落光标（preferOffset）；否则仅落行首
@@ -3592,11 +3712,11 @@ sealed class MdViewer : IDocViewer {
 			p.Inlines.Add(r);
 			return;
 		}
-		// 保留行首缩进
+		// 保留行首缩进（Tab 用 mdtab 显示为 MdTabSize 列宽）
 		var lead = 0;
 		while (lead < line.Length && (line[lead] == ' ' || line[lead] == '\t')) lead++;
 		if (lead > 0)
-			p.Inlines.Add(new Run(line.Substring(0, lead)));
+			appendwithtabs(p.Inlines, line.Substring(0, lead));
 		var rest = line.Substring(lead);
 		var n = 0;
 		while (n < rest.Length && rest[n] == ch) n++;
@@ -3623,7 +3743,9 @@ sealed class MdViewer : IDocViewer {
 	/// <summary>填充一行源码样式（用预计算围栏索引，避免每次 O(n) 扫描）。</summary>
 	void fillsourceline(Paragraph p, List<string> lines, int line0, bool showRaw) {
 		if (p == null || lines == null || line0 < 0 || line0 >= lines.Count) return;
-		var line = lines[line0] ?? "";
+		// raw 行保留 \\t；着色用 displayline 展宽串，凡写入 Inlines 的片段经 appendwithtabs 打 mdtab 标记
+		var rawLine = lines[line0] ?? "";
+		var line = displayline(rawLine);
 		var simple = usesimpleeditor;
 		var codeBg = brush(0xF3, 0xF4, 0xF6);
 		// 先清掉 HR/引用块级装饰，避免换行后残留
@@ -3637,53 +3759,176 @@ sealed class MdViewer : IDocViewer {
 		if (kind == 2) {
 			// 围栏开/闭：```lang 语言名单独着色
 			if (!simple) p.Background = codeBg;
-			fillfencemarkerline(p, line, simple ? null : codeBg);
+			// 使用 raw 以便 appendwithtabs 正确打标；fillfencemarkerline 内部若整行 Run 则改走 append
+			fillfencemarkerline(p, rawLine, simple ? null : codeBg);
 			return;
 		}
 		if (kind == 1) {
 			var lang = lineFenceLang != null && line0 < lineFenceLang.Length ? lineFenceLang[line0] : "";
-			// 代码块正文：语法高亮（纯代码无底色，Typora 保留浅底）
+			// 代码块正文：有 Tab 时整行 appendwithtabs（保持单个 Tab 单元）；无 Tab 再语法高亮
 			if (!simple) p.Background = codeBg;
-			MdFlowBuilder.AppendCode(p.Inlines, line, lang);
+			if (rawLine.IndexOf('\t') >= 0)
+				appendwithtabs(p.Inlines, rawLine);
+			else
+				MdFlowBuilder.AppendCode(p.Inlines, line, lang);
 			if (p.Inlines.Count == 0) p.Inlines.Add(new Run(""));
 			return;
 		}
 		// 分隔线
-		if (ishrline(line)) {
+		if (ishrline(rawLine) || ishrline(line)) {
 			if (simple) {
-				p.Inlines.Add(new Run(line) { Foreground = brush(0x9C, 0xA3, 0xAF) });
+				appendwithtabs(p.Inlines, rawLine, brush(0x9C, 0xA3, 0xAF));
 				return;
 			}
-			fillhrline(p, line, showRaw);
+			fillhrline(p, rawLine, showRaw);
 			return;
 		}
 		// 引用
-		if (line.StartsWith(">", StringComparison.Ordinal)) {
+		if (rawLine.TrimStart().StartsWith(">", StringComparison.Ordinal)) {
 			if (simple) {
-				// 仅灰色 > 与正文色，无左边框/底色
-				p.Inlines.Add(new Run(">") { Foreground = brush(0x9C, 0xA3, 0xAF) });
-				if (line.Length > 1 && line[1] == ' ') {
-					p.Inlines.Add(new Run(" "));
-					colorinlines(p.Inlines, line.Substring(2), true, null, 0, brush(0x4B, 0x55, 0x63));
-				} else if (line.Length > 1) {
-					colorinlines(p.Inlines, line.Substring(1), true, null, 0, brush(0x4B, 0x55, 0x63));
-				}
+				appendwithtabs(p.Inlines, rawLine, brush(0x4B, 0x55, 0x63));
 				return;
 			}
-			fillquoteline(p, line, showRaw, line0);
+			// fillquoteline 用显示串画样式，但前导 Tab 需保留标记：先输出 leading tabs from raw
+			fillquotelinefromraw(p, rawLine, showRaw, line0);
 			return;
 		}
-		colorline(p.Inlines, line, showRaw, line0);
+		colorlinefromraw(p.Inlines, rawLine, showRaw, line0);
 		// Typora：标题放大时抬高行高；纯代码等宽行高
 		if (!simple) {
 			var hi = 0;
-			while (hi < line.Length && line[hi] == '#') hi++;
-			if (hi > 0 && hi <= 6 && hi < line.Length && line[hi] == ' ') {
+			var t = rawLine.TrimStart();
+			while (hi < t.Length && t[hi] == '#') hi++;
+			if (hi > 0 && hi <= 6 && hi < t.Length && t[hi] == ' ') {
 				var sizes = new[] { 1.35, 1.22, 1.12, 1.06, 1.02, 1.0 };
 				var fs = sourceBox.FontSize * sizes[hi - 1];
 				p.LineHeight = Math.Max(p.LineHeight, fs * 1.45);
 			}
 		}
+	}
+
+	/// <summary>列表/正文着色：raw 含 \\t 时前导缩进用 mdtab，正文按展宽串着色。</summary>
+	void colorlinefromraw(InlineCollection inlines, string rawLine, bool showMarkers, int srcLine = -1) {
+		rawLine ??= "";
+		var line = displayline(rawLine); // 无 \\t 的显示串，供正则与正文着色
+		var simple = usesimpleeditor;
+
+		// 列表：ASCII -*+
+		var umAscii = System.Text.RegularExpressions.Regex.Match(rawLine, @"^([ \t]*)([*+-])(\s+)(.*)$");
+		if (umAscii.Success) {
+			var indent = umAscii.Groups[1].Value;
+			var mark = umAscii.Groups[2].Value;
+			var sp = umAscii.Groups[3].Value;
+			var body = umAscii.Groups[4].Value;
+			if (indent.Length > 0) appendwithtabs(inlines, indent);
+			if (useconceal)
+				inlines.Add(listasciimarkrun(mark, showMarkers));
+			else
+				inlines.Add(new Run(mark) { Foreground = brush(0x9C, 0xA3, 0xAF) });
+			if (simple)
+				inlines.Add(new Run(sp));
+			else
+				inlines.Add(markerrun(sp, showMarkers));
+			// body 一般无 leading tab；若有则 appendwithtabs 经 colorinlines 前展开
+			if (body.IndexOf('\t') >= 0)
+				appendwithtabs(inlines, body);
+			else
+				colorinlines(inlines, body, showMarkers, srcLine: srcLine);
+			return;
+		}
+		// 列表：Unicode ●•○◦
+		var umUni = System.Text.RegularExpressions.Regex.Match(rawLine, @"^([ \t]*)([●•○◦])(\s+)(.*)$");
+		if (umUni.Success) {
+			var indent = umUni.Groups[1].Value;
+			var mark = umUni.Groups[2].Value;
+			var sp = umUni.Groups[3].Value;
+			var body = umUni.Groups[4].Value;
+			if (indent.Length > 0) appendwithtabs(inlines, indent);
+			if (simple)
+				inlines.Add(new Run(mark + sp) { Foreground = brush(0x9C, 0xA3, 0xAF) });
+			else {
+				inlines.Add(new Run(mark));
+				inlines.Add(new Run(sp));
+			}
+			if (body.IndexOf('\t') >= 0)
+				appendwithtabs(inlines, body);
+			else
+				colorinlines(inlines, body, showMarkers, srcLine: srcLine);
+			return;
+		}
+		// 有序列表
+		var om = System.Text.RegularExpressions.Regex.Match(rawLine, @"^([ \t]*)(\d{1,9}[.)]\s+)(.*)$");
+		if (om.Success) {
+			var indent = om.Groups[1].Value;
+			var mark = om.Groups[2].Value;
+			var body = om.Groups[3].Value;
+			if (indent.Length > 0) appendwithtabs(inlines, indent);
+			if (simple)
+				inlines.Add(new Run(mark) { Foreground = brush(0x9C, 0xA3, 0xAF) });
+			else
+				inlines.Add(markerrun(mark, showMarkers));
+			if (body.IndexOf('\t') >= 0)
+				appendwithtabs(inlines, body);
+			else
+				colorinlines(inlines, body, showMarkers, srcLine: srcLine);
+			return;
+		}
+		// 标题 / 其它：整行走 appendwithtabs + 原 colorline 逻辑（用 display 串）
+		// 若有 tab，先输出整行 tab 感知版本中的非复杂部分
+		if (rawLine.IndexOf('\t') >= 0) {
+			// 标题
+			var t = rawLine.TrimStart('\t', ' ');
+			var leadLen = rawLine.Length - t.Length;
+			var lead = rawLine.Substring(0, leadLen);
+			var hi = 0;
+			while (hi < t.Length && t[hi] == '#') hi++;
+			if (hi > 0 && hi <= 6 && hi < t.Length && t[hi] == ' ') {
+				if (lead.Length > 0) appendwithtabs(inlines, lead);
+				var mark = t.Substring(0, hi + 1);
+				var body = t.Substring(hi + 1);
+				var headFg = headingfg(hi);
+				if (simple) {
+					inlines.Add(new Run(mark) { Foreground = headingmarkfg(hi) });
+					colorinlines(inlines, body, showMarkers, FontWeights.SemiBold, 0, headFg, srcLine);
+				} else {
+					inlines.Add(markerrun(mark, showMarkers));
+					var sizes = new[] { 1.35, 1.22, 1.12, 1.06, 1.02, 1.0 };
+					colorinlines(inlines, body, showMarkers, FontWeights.SemiBold,
+						sourceBox.FontSize * sizes[hi - 1], headFg, srcLine);
+				}
+				return;
+			}
+			appendwithtabs(inlines, rawLine);
+			return;
+		}
+		// 无 tab：原路径
+		colorline(inlines, line, showMarkers, srcLine);
+	}
+
+	void fillquotelinefromraw(Paragraph p, string rawLine, bool showRaw, int srcLine) {
+		rawLine ??= "";
+		// 前导空白（含 tab）
+		var i = 0;
+		while (i < rawLine.Length && (rawLine[i] == ' ' || rawLine[i] == '\t')) i++;
+		var lead = rawLine.Substring(0, i);
+		var rest = rawLine.Substring(i);
+		if (lead.Length > 0) appendwithtabs(p.Inlines, lead);
+		if (useconceal) {
+			p.BorderBrush = brush(0x9C, 0xA3, 0xAF);
+			p.BorderThickness = new Thickness(3, 0, 0, 0);
+			p.Margin = new Thickness(4, 4, 0, 4);
+			p.Padding = new Thickness(12, 4, 8, 4);
+			p.Background = brush(0xF3, 0xF4, 0xF6);
+		}
+		if (rest.StartsWith(">", StringComparison.Ordinal)) {
+			p.Inlines.Add(markerrun(">", showRaw));
+			if (rest.Length > 1 && rest[1] == ' ') {
+				p.Inlines.Add(markerrun(" ", showRaw));
+				colorinlines(p.Inlines, rest.Substring(2), showRaw, null, 0, brush(0x4B, 0x55, 0x63), srcLine);
+			} else if (rest.Length > 1)
+				colorinlines(p.Inlines, rest.Substring(1), showRaw, null, 0, brush(0x4B, 0x55, 0x63), srcLine);
+		} else
+			appendwithtabs(p.Inlines, rest, brush(0x4B, 0x55, 0x63));
 	}
 
 	void fillhrline(Paragraph p, string line, bool showRaw) {
@@ -4830,12 +5075,51 @@ sealed class MdViewer : IDocViewer {
 			if (offset < 0) offset = 0;
 			if (offset > text.Length) offset = text.Length;
 			var ln = lineof(text, offset);
-			var local = offset - offsetofline(text, ln);
+			var rawLocal = offset - offsetofline(text, ln);
+			// mdtab 控件计 1 逻辑字符，与 raw 中 \\t 一致
 			setcarettoline(ln);
 			var p = paragraphat(ln);
-			if (p != null && local > 0)
-				setcaretinparagraph(p, local);
+			if (p != null && rawLocal > 0)
+				setcaretinparagraph(p, rawLocal);
 		} catch { /* ignore */ }
+	}
+
+	/// <summary>从 from 到 to 的逻辑字符数：文本按字，mdtab 控件计 1。</summary>
+	static int countlogicalchars(TextPointer from, TextPointer to) {
+		if (from == null || to == null) return 0;
+		try {
+			if (from.CompareTo(to) >= 0) return 0;
+			var n = 0;
+			var nav = from;
+			while (nav != null && nav.CompareTo(to) < 0) {
+				var ctx = nav.GetPointerContext(LogicalDirection.Forward);
+				if (ctx == TextPointerContext.Text) {
+					var run = nav.GetTextInRun(LogicalDirection.Forward) ?? "";
+					var take = run.Length;
+					var end = nav.GetPositionAtOffset(take, LogicalDirection.Forward);
+					if (end != null && end.CompareTo(to) > 0) {
+						var tr = new TextRange(nav, to);
+						n += (tr.Text ?? "").Length;
+						break;
+					}
+					n += take;
+					nav = end;
+				} else if (ctx == TextPointerContext.EmbeddedElement) {
+					// InlineUIContainer（mdtab / 图）
+					n += 1;
+					nav = nav.GetNextContextPosition(LogicalDirection.Forward);
+				} else {
+					nav = nav.GetNextContextPosition(LogicalDirection.Forward);
+				}
+				if (nav == null) break;
+			}
+			return n;
+		} catch {
+			try {
+				var tr = new TextRange(from, to);
+				return (tr.Text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Length;
+			} catch { return 0; }
+		}
 	}
 
 	/// <summary>慢路径：全文 TextRange（仅全量高亮等少用处）。</summary>
@@ -5150,7 +5434,7 @@ sealed class MdViewer : IDocViewer {
 	public void ZoomOut() => SetZoom(zoom / 1.15);
 	public void ZoomFitWidth() => SetZoom(1.0);
 	public void ZoomFitPage() => SetZoom(1.0);
-	/// <summary>按当前 MdTabSize 重算行首缩进、展开剩余 Tab，并重建源码与预览。</summary>
+	/// <summary>按当前 MdTabSize 重算行首空格缩进，并重建源码与预览（不把 \\t 展成空格）。</summary>
 	public void RefreshPreview() {
 		// 系统参数可能改了预览引擎
 		try {
@@ -5167,9 +5451,9 @@ sealed class MdViewer : IDocViewer {
 		var tab = AppSettings.Current?.MdTabSize ?? 3;
 		if (tab < 1) tab = 1;
 		var next = rawText ?? "";
+		// 仅重映射行首空格缩进列数；\\t 保持为一个制表符
 		if (tab != appliedTabSize && appliedTabSize >= 1)
 			next = MdParser.RetargetLeadingIndent(next, appliedTabSize, tab);
-		next = MdParser.ExpandTabs(next, tab);
 		appliedTabSize = tab;
 		if (!string.Equals(next, rawText, StringComparison.Ordinal)) {
 			rawText = next;
@@ -5183,7 +5467,6 @@ sealed class MdViewer : IDocViewer {
 				finally { suppressText = false; }
 			}
 		} else if (editMode) {
-			// 文本未变也刷新高亮（设置项其它影响）
 			applysourcehighlight(force: true);
 		}
 		rebuildpreview(force: true);
@@ -5203,6 +5486,12 @@ sealed class MdViewer : IDocViewer {
 			sourceBox.Document.FontSize = fs;
 		applypreviewzoom();
 	}
+
+	Paragraph makesourcepara(double lineHeight) => new() {
+		Margin = new Thickness(0),
+		Padding = new Thickness(0),
+		LineHeight = lineHeight,
+	};
 
 	void applypreviewzoom() {
 		try {

@@ -147,8 +147,13 @@ sealed class DocxViewer : IDocViewer {
 	public string Title { get; private set; }
 	public DocKind Kind => DocKind.Docx;
 	public double Zoom => zoom;
-	public string StatusText =>
-		$"DOCX  第 {CurrentPage}/{PageCount} 页  ·  {(int)(zoom * 100)}%  ·  连续分页（可选字）";
+	public string StatusText {
+		get {
+			var fmt = string.Equals(Path.GetExtension(FilePath), ".doc", StringComparison.OrdinalIgnoreCase)
+				? "DOC" : "DOCX";
+			return $"{fmt}  第 {CurrentPage}/{PageCount} 页  ·  {(int)(zoom * 100)}%  ·  连续分页（可选字）";
+		}
+	}
 	public int PageCount => Math.Max(1, pageCount);
 	public int CurrentPage {
 		get {
@@ -317,6 +322,12 @@ sealed class DocxViewer : IDocViewer {
 		Stream stream = fileBytes != null && fileBytes.Length > 0
 			? new MemoryStream(fileBytes, writable: false)
 			: DocFileIo.OpenReadShared(FilePath);
+		var ext = Path.GetExtension(FilePath).ToLowerInvariant();
+		if (ext == ".doc") {
+			using (stream)
+				loaddoclegacy(stream);
+			return;
+		}
 		using (stream) {
 			using var word = WordprocessingDocument.Open(stream, false);
 			mainPart = word.MainDocumentPart;
@@ -352,6 +363,29 @@ sealed class DocxViewer : IDocViewer {
 			mainPart = null;
 		}
 		DocLog.Info($"Docx Load pages~={pageCount} toc={tocEntries.Count} stacked");
+		StatusChanged?.Invoke();
+	}
+
+	void loaddoclegacy(Stream stream) {
+		flow = newflow();
+		pageW = DEF_PAGE_W;
+		pageH = DEF_PAGE_H;
+		padL = padT = padR = padB = DEF_MARGIN;
+		applypagesize(flow);
+		pendingPageBreak = false;
+		tocEntries.Clear();
+		numCounters.Clear();
+
+		LegacyOfficeLoader.LoadDocInto(flow, stream);
+		if (flow.Blocks.Count == 0)
+			flow.Blocks.Add(new Paragraph(new Run("(无可显示内容)")));
+
+		applyzoomsize();
+		buildpages();
+		pageScroll.ScrollToVerticalOffset(0);
+		buildtocui();
+		mainPart = null;
+		DocLog.Info($"Doc Load (legacy) pages~={pageCount} toc={tocEntries.Count}");
 		StatusChanged?.Invoke();
 	}
 

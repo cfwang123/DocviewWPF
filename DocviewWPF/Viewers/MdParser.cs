@@ -384,7 +384,7 @@ static class MdParser {
 	}
 
 	/// <summary>
-	/// 将 \\t 按 tabSize 展成空格（WPF RichTextBox 无法改 Tab 显示宽，用软 Tab 对齐设置）。
+	/// 将 \\t 按 tabSize 展成空格（工具/测试用）。编辑器加载与 Tab 键默认保留 \\t，不调用此方法。
 	/// <paramref name="outsideFencesOnly"/> 为 true 时保留围栏代码块内的 Tab。
 	/// </summary>
 	public static string ExpandTabs(string text, int tabSize = 3, bool outsideFencesOnly = true) {

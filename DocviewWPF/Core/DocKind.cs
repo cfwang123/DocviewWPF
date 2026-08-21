@@ -25,7 +25,9 @@ static class DocKindUtil {
 		if (string.IsNullOrEmpty(ext)) return DocKind.Unknown;
 		switch (ext.ToLowerInvariant()) {
 			case ".pdf": return DocKind.Pdf;
+			case ".doc":
 			case ".docx": return DocKind.Docx;
+			case ".xls":
 			case ".xlsx":
 			case ".xlsm": return DocKind.Xlsx;
 			case ".md":
@@ -113,10 +115,10 @@ static class DocKindUtil {
 
 	/// <summary>打开对话框筛选：文档 / 代码 / 图片 / 全部分组。</summary>
 	public static string Filter =>
-		"支持的文件|*.pdf;*.docx;*.xlsx;*.xlsm;*.csv;*.tsv;*.txt;*.md;*.markdown"
+		"支持的文件|*.pdf;*.doc;*.docx;*.xls;*.xlsx;*.xlsm;*.csv;*.tsv;*.txt;*.md;*.markdown"
 		+ ";*.py;*.php;*.lua;*.cs;*.js;*.ts;*.html;*.htm;*.css;*.json;*.xml;*.sql;*.java;*.go;*.rs;*.c;*.cpp;*.h"
 		+ ";*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.ico;*.tif;*.tiff;*.webp"
-		+ "|PDF|*.pdf|Word|*.docx|Excel|*.xlsx;*.xlsm|CSV|*.csv;*.tsv|Markdown|*.md;*.markdown"
+		+ "|PDF|*.pdf|Word|*.doc;*.docx|Excel|*.xls;*.xlsx;*.xlsm|CSV|*.csv;*.tsv|Markdown|*.md;*.markdown"
 		+ "|文本与代码|*.txt;*.log;*.py;*.php;*.lua;*.cs;*.js;*.ts;*.jsx;*.tsx;*.html;*.htm;*.css;*.scss;*.json;*.xml;*.yaml;*.yml;*.sql;*.sh;*.bat;*.ps1;*.java;*.go;*.rs;*.c;*.cpp;*.h;*.hpp"
 		+ "|图片|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.ico;*.tif;*.tiff;*.webp"
 		+ "|所有文件|*.*";

@@ -1,10 +1,13 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace DocviewWPF;
@@ -210,7 +213,8 @@ sealed class ConsoleViewer : IDocViewer {
 		imeBox = new TextBox {
 			Background = Brushes.Transparent,
 			Foreground = Brushes.Transparent,
-			CaretBrush = new SolidColorBrush(Color.FromArgb(0x01, 0xFF, 0xFF, 0xFF)),
+			// 关掉系统 TextBox 闪烁插入符；终端层画实心光标
+			CaretBrush = Brushes.Transparent,
 			BorderThickness = new Thickness(0),
 			Padding = new Thickness(0),
 			Margin = new Thickness(0),
@@ -218,8 +222,8 @@ sealed class ConsoleViewer : IDocViewer {
 			FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei Mono, NSimSun"),
 			AcceptsReturn = false,
 			AcceptsTab = false,
-			// 近乎不可见，但可获焦；系统 IME 候选窗锚在此控件光标上
-			Opacity = 0.02,
+			// 近乎不可见，但可获焦；系统 IME 候选窗锚在此控件上
+			Opacity = 0.01,
 			Width = 12,
 			Height = 18,
 			Focusable = true,
@@ -231,8 +235,17 @@ sealed class ConsoleViewer : IDocViewer {
 		try { InputMethod.SetPreferredImeState(imeBox, InputMethodState.DoNotCare); } catch { /* ignore */ }
 		imeBox.TextChanged += onimetextchanged;
 		imeBox.PreviewKeyDown += onimepreviewkeydown;
+		imeBox.PreviewTextInput += onimepreviewtextinput;
+		// 组字预览画在终端光标处（透明 TextBox 本身看不见）
+		TextCompositionManager.AddPreviewTextInputStartHandler(imeBox, onimecompstart);
+		TextCompositionManager.AddPreviewTextInputUpdateHandler(imeBox, onimecompupdate);
+		TextCompositionManager.AddPreviewTextInputHandler(imeBox, onimecompcomplete);
+		// 获焦后反复 HideCaret：WPF CaretBrush 挡不住系统插入符
+		imeBox.GotKeyboardFocus += (_, _) => hideimecaret();
+		imeBox.GotFocus += (_, _) => hideimecaret();
 		imeBox.LostKeyboardFocus += (_, _) => {
 			// 焦点被工具栏抢走时不强制抢回
+			try { term.SetImeComposition(""); } catch { /* ignore */ }
 		};
 
 		imeLayer = new Canvas {
@@ -305,17 +318,80 @@ sealed class ConsoleViewer : IDocViewer {
 		if (imeSilent || disposed) return;
 		var t = imeBox.Text;
 		if (string.IsNullOrEmpty(t)) return;
-		// 把 TextBox 中确认的文字（含中文）写入 PTY
-		try {
-			if (session != null && !session.HasExited)
-				session.WriteSync(Encoding.UTF8.GetBytes(t));
-		} catch (Exception ex) {
-			DocLog.Warn("console ime write: " + ex.Message);
+		// 组字中途 TextBox.Text 有时会带拼音：有活跃组字预览时不要当最终字写入
+		if (!string.IsNullOrEmpty(imeCompActive)) {
+			return;
 		}
+		writeptytext(t);
 		imeSilent = true;
 		try { imeBox.Text = ""; } catch { /* ignore */ }
 		imeSilent = false;
 		syncimeboxpos();
+	}
+
+	/// <summary>当前 IME 组字串（未上屏）；空=无组字。</summary>
+	string imeCompActive = "";
+
+	void onimecompstart(object sender, TextCompositionEventArgs e) {
+		imeCompActive = e.TextComposition?.CompositionText ?? e.Text ?? "";
+		try { term.SetImeComposition(imeCompActive); } catch { /* ignore */ }
+		syncimeboxpos();
+	}
+
+	void onimecompupdate(object sender, TextCompositionEventArgs e) {
+		var c = e.TextComposition?.CompositionText;
+		if (c == null) c = e.Text ?? "";
+		imeCompActive = c;
+		try { term.SetImeComposition(imeCompActive); } catch { /* ignore */ }
+		syncimeboxpos();
+	}
+
+	void onimecompcomplete(object sender, TextCompositionEventArgs e) {
+		var t = e.Text ?? "";
+		imeCompActive = "";
+		try { term.SetImeComposition(""); } catch { /* ignore */ }
+		// 确认字写入 PTY（中文/选词）；与 TextChanged 可能双到，writepty 内幂等靠即时清空
+		if (!string.IsNullOrEmpty(t) && t != "\0") {
+			writeptytext(t);
+			imeSilent = true;
+			try { imeBox.Text = ""; } catch { /* ignore */ }
+			imeSilent = false;
+			e.Handled = true;
+		}
+		syncimeboxpos();
+	}
+
+	void onimepreviewtextinput(object sender, TextCompositionEventArgs e) {
+		if (disposed || imeSilent) return;
+		// 组字中：最终字由 onimecompcomplete 写；中间预览不写 PTY
+		if (!string.IsNullOrEmpty(imeCompActive)) return;
+		var t = e.Text;
+		if (string.IsNullOrEmpty(t) || t == "\0") return;
+		// 无活跃组字：英/数字/IME「英」模式直入
+		writeptytext(t);
+		imeSilent = true;
+		try { imeBox.Text = ""; } catch { /* ignore */ }
+		imeSilent = false;
+		e.Handled = true;
+		syncimeboxpos();
+	}
+
+	string lastPtyWrite;
+	int lastPtyWriteTick;
+
+	void writeptytext(string t) {
+		if (string.IsNullOrEmpty(t) || session == null || session.HasExited) return;
+		// 防 TextChanged + TextInput + complete 短时双写
+		var now = Environment.TickCount;
+		if (t == lastPtyWrite && unchecked(now - lastPtyWriteTick) >= 0 && unchecked(now - lastPtyWriteTick) < 40)
+			return;
+		lastPtyWrite = t;
+		lastPtyWriteTick = now;
+		try {
+			session.WriteSync(Encoding.UTF8.GetBytes(t));
+		} catch (Exception ex) {
+			DocLog.Warn("console ime write: " + ex.Message);
+		}
 	}
 
 	void onimepreviewkeydown(object sender, KeyEventArgs e) {
@@ -325,6 +401,10 @@ sealed class ConsoleViewer : IDocViewer {
 		var ctrl = mods.HasFlag(ModifierKeys.Control);
 		var alt = mods.HasFlag(ModifierKeys.Alt);
 
+		// Alt+F4 关闭程序：不 Handled，交给系统/主窗
+		if (alt && !ctrl && key == Key.F4)
+			return;
+
 		// Ctrl/Alt 组合：交给终端（Ctrl+C 中断、Ctrl+V 粘贴等）
 		if (ctrl || alt) {
 			if (term.HandleKeyDown(key, mods)) {
@@ -332,17 +412,53 @@ sealed class ConsoleViewer : IDocViewer {
 				imeSilent = true;
 				try { imeBox.Text = ""; } catch { /* ignore */ }
 				imeSilent = false;
+				try { term.SetImeComposition(""); } catch { /* ignore */ }
+				imeCompActive = "";
 			}
 			return;
 		}
 
-		// IME 打开时：空格/回车/方向/退格交给输入法，不抢
-		if (term.IsImeOpen) {
+		// 正在组字：纯 ASCII 组字 + Enter → 当英文命令提交（dir/cd 等），避免「字母不显示/回车被 IME 吃掉」
+		if (!string.IsNullOrEmpty(imeCompActive)) {
+			if (key == Key.Return && ispureascii(imeCompActive)) {
+				var ascii = imeCompActive;
+				imeCompActive = "";
+				try { term.SetImeComposition(""); } catch { /* ignore */ }
+				writeptytext(ascii);
+				writeptytext("\r");
+				imeSilent = true;
+				try { imeBox.Text = ""; } catch { /* ignore */ }
+				imeSilent = false;
+				e.Handled = true;
+				syncimeboxpos();
+				return;
+			}
+			// 其余（空格选词、方向、中文组字）交给输入法
+			syncimeboxpos();
+			return;
+		}
+		// IME 已开但尚未出组字串：可打印键放行给 IME（中文首键起组字；「英」模式走 TextInput）
+		if (term.IsImeOpen && isimeprintablekey(key)) {
+			syncimeboxpos();
+			return;
+		}
+		if (term.IsImeOpen && isimeeditkey(key)) {
 			syncimeboxpos();
 			return;
 		}
 
-		// 无 IME：功能键写入 PTY，不让 TextBox 处理
+		// 无 IME：可打印键直接写 PTY（不依赖 TextBox.Text，避免字母丢失）
+		if (isimeprintablekey(key)) {
+			if (trykeychartoterm(key, mods)) {
+				e.Handled = true;
+				imeSilent = true;
+				try { imeBox.Text = ""; } catch { /* ignore */ }
+				imeSilent = false;
+				syncimeboxpos();
+			}
+			return;
+		}
+
 		switch (key) {
 			case Key.Return:
 			case Key.Tab:
@@ -371,6 +487,95 @@ sealed class ConsoleViewer : IDocViewer {
 		}
 	}
 
+	static bool isimeprintablekey(Key key) {
+		if (key >= Key.A && key <= Key.Z) return true;
+		if (key >= Key.D0 && key <= Key.D9) return true;
+		if (key >= Key.NumPad0 && key <= Key.NumPad9) return true;
+		switch (key) {
+			case Key.Space:
+			case Key.OemMinus: case Key.OemPlus:
+			case Key.OemOpenBrackets: case Key.OemCloseBrackets:
+			case Key.OemPipe: case Key.OemSemicolon: case Key.OemQuotes:
+			case Key.OemComma: case Key.OemPeriod: case Key.OemQuestion:
+			case Key.OemTilde: case Key.OemBackslash:
+			case Key.Divide: case Key.Multiply: case Key.Subtract:
+			case Key.Add: case Key.Decimal:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	static bool isimeeditkey(Key key) {
+		switch (key) {
+			case Key.Return: case Key.Escape: case Key.Back:
+			case Key.Left: case Key.Right: case Key.Up: case Key.Down:
+			case Key.Home: case Key.End: case Key.Space:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	static bool ispureascii(string s) {
+		if (string.IsNullOrEmpty(s)) return false;
+		foreach (var ch in s) {
+			if (ch < 32 || ch > 126) return false;
+		}
+		return true;
+	}
+
+	/// <summary>无 IME 时把按键变成字符写入 PTY（字母/数字/符号）。</summary>
+	bool trykeychartoterm(Key key, ModifierKeys mods) {
+		if (session == null || session.HasExited) return false;
+		// 复用终端 ToUnicode 路径：通过 HandleKeyDown 会因「可打印不处理」返回 false，
+		// 这里直接走 emit 同款 Write
+		try {
+			var shift = mods.HasFlag(ModifierKeys.Shift);
+			string text = null;
+			if (key >= Key.A && key <= Key.Z) {
+				var c = (char)('a' + (key - Key.A));
+				var caps = false;
+				try { caps = Keyboard.IsKeyToggled(Key.CapsLock); } catch { /* ignore */ }
+				if (shift ^ caps) c = char.ToUpperInvariant(c);
+				text = c.ToString();
+			} else if (key >= Key.D0 && key <= Key.D9) {
+				if (!shift) text = ((char)('0' + (key - Key.D0))).ToString();
+				else text = ")!@#$%^&*("[key - Key.D0].ToString();
+			} else if (key >= Key.NumPad0 && key <= Key.NumPad9) {
+				text = ((char)('0' + (key - Key.NumPad0))).ToString();
+			} else if (key == Key.Space) {
+				text = " ";
+			} else {
+				// 其余 OEM：交给终端 HandleKeyDown 的 fallback 不可用，简单映射
+				switch (key) {
+					case Key.OemMinus: text = shift ? "_" : "-"; break;
+					case Key.OemPlus: text = shift ? "+" : "="; break;
+					case Key.OemOpenBrackets: text = shift ? "{" : "["; break;
+					case Key.OemCloseBrackets: text = shift ? "}" : "]"; break;
+					case Key.OemPipe: text = shift ? "|" : "\\"; break;
+					case Key.OemSemicolon: text = shift ? ":" : ";"; break;
+					case Key.OemQuotes: text = shift ? "\"" : "'"; break;
+					case Key.OemComma: text = shift ? "<" : ","; break;
+					case Key.OemPeriod: text = shift ? ">" : "."; break;
+					case Key.OemQuestion: text = shift ? "?" : "/"; break;
+					case Key.OemTilde: text = shift ? "~" : "`"; break;
+					case Key.Divide: text = "/"; break;
+					case Key.Multiply: text = "*"; break;
+					case Key.Subtract: text = "-"; break;
+					case Key.Add: text = "+"; break;
+					case Key.Decimal: text = "."; break;
+				}
+			}
+			if (string.IsNullOrEmpty(text)) return false;
+			writeptytext(text);
+			return true;
+		} catch (Exception ex) {
+			DocLog.Warn("console keychar: " + ex.Message);
+			return false;
+		}
+	}
+
 	void syncimeboxpos() {
 		if (imeBox == null || term == null) return;
 		try {
@@ -386,8 +591,36 @@ sealed class ConsoleViewer : IDocViewer {
 			// 保证在最前
 			Panel.SetZIndex(imeLayer, 10);
 			Panel.SetZIndex(imeBox, 11);
+			hideimecaret();
 		} catch { /* ignore */ }
 	}
+
+	/// <summary>关掉 IME 锚点 TextBox 的系统闪烁插入符（Win32 + WPF）。</summary>
+	void hideimecaret() {
+		try {
+			imeBox.CaretBrush = Brushes.Transparent;
+			var src = PresentationSource.FromVisual(imeBox) as HwndSource;
+			if (src != null && src.Handle != IntPtr.Zero) {
+				HideCaret(src.Handle);
+				// 多拍：系统会在布局/IME 后重建插入符
+				imeBox.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => {
+					try {
+						var s2 = PresentationSource.FromVisual(imeBox) as HwndSource;
+						if (s2 != null) HideCaret(s2.Handle);
+					} catch { /* ignore */ }
+				}));
+				imeBox.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => {
+					try {
+						var s2 = PresentationSource.FromVisual(imeBox) as HwndSource;
+						if (s2 != null) HideCaret(s2.Handle);
+					} catch { /* ignore */ }
+				}));
+			}
+		} catch { /* ignore */ }
+	}
+
+	[DllImport("user32.dll")]
+	static extern bool HideCaret(IntPtr hWnd);
 
 	bool istoolbarfocused() {
 		var fe = Keyboard.FocusedElement as DependencyObject;
@@ -510,9 +743,39 @@ sealed class ConsoleViewer : IDocViewer {
 		try { return term.DumpCellsDebug(maxRows); } catch { return ""; }
 	}
 
-	/// <summary>自检：截图 PNG。</summary>
+	/// <summary>自检：截图终端层 PNG。</summary>
 	public byte[] CapturePngForTest() {
 		try { return term.CapturePng(); } catch { return null; }
+	}
+
+	/// <summary>自检：截整页（含 IME 叠层）PNG。</summary>
+	public byte[] CaptureFullPngForTest() {
+		try {
+			root.UpdateLayout();
+			var w = (int)Math.Ceiling(Math.Max(1, root.ActualWidth));
+			var h = (int)Math.Ceiling(Math.Max(1, root.ActualHeight));
+			if (w < 2 || h < 2) return null;
+			var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+			rtb.Render(root);
+			var enc = new PngBitmapEncoder();
+			enc.Frames.Add(BitmapFrame.Create(rtb));
+			using var ms = new MemoryStream();
+			enc.Save(ms);
+			return ms.ToArray();
+		} catch {
+			return null;
+		}
+	}
+
+	/// <summary>自检：直接往 VT 缓冲喂字节（不经 ConPTY）。</summary>
+	public void FeedVtForTest(byte[] data) {
+		try { term.FeedSync(data); } catch { /* ignore */ }
+	}
+
+	/// <summary>自检：强制 IME 聚焦并 HideCaret。</summary>
+	public void PrepareImeFocusForTest() {
+		PrepareImeFocus();
+		hideimecaret();
 	}
 
 	/// <summary>自检：会话统计。</summary>
@@ -732,6 +995,12 @@ sealed class ConsoleViewer : IDocViewer {
 		if (disposed) return;
 		disposed = true;
 		killshell(showMsg: false);
+		try {
+			TextCompositionManager.RemovePreviewTextInputStartHandler(imeBox, onimecompstart);
+			TextCompositionManager.RemovePreviewTextInputUpdateHandler(imeBox, onimecompupdate);
+			TextCompositionManager.RemovePreviewTextInputHandler(imeBox, onimecompcomplete);
+		} catch { /* ignore */ }
+		try { term.SetImeComposition(""); } catch { /* ignore */ }
 		try { term.DisposeResources(); } catch { /* ignore */ }
 	}
 }

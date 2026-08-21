@@ -1698,9 +1698,10 @@ public partial class MainWindow : Window {
 		var x = currentviewer() as XlsxViewer;
 		hookxlsxevents(x);
 		var isXlsx = x != null;
-		var editing = isXlsx && x.EditMode;
+		var canEdit = x != null && x.CanEdit;
+		var editing = isXlsx && canEdit && x.EditMode;
 		if (bxlsxedit != null) {
-			bxlsxedit.Visibility = isXlsx ? Visibility.Visible : Visibility.Collapsed;
+			bxlsxedit.Visibility = isXlsx && canEdit ? Visibility.Visible : Visibility.Collapsed;
 			bxlsxedit.IsChecked = editing;
 			settooliconactive(iconxlsxedit, editing);
 			bxlsxedit.ToolTip = editing ? "退出编辑模式" : "编辑表格";
@@ -6752,6 +6753,9 @@ public partial class MainWindow : Window {
 
 		// 命令行标签：输入优先走透明 IME TextBox；勿在主窗 Handled 抢走中文组字
 		if (currentviewer() is ConsoleViewer cv && cv.IsCapturingKeys) {
+			// Alt+F4 关闭窗口：绝不能交给终端吞掉
+			if (alt && !ctrl && key == Key.F4)
+				return;
 			if (key == Key.LeftCtrl || key == Key.RightCtrl || key == Key.LeftAlt || key == Key.RightAlt
 				|| key == Key.LeftShift || key == Key.RightShift || key == Key.LWin || key == Key.RWin
 				|| key == Key.CapsLock || key == Key.NumLock || key == Key.Scroll) {

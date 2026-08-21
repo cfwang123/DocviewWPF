@@ -34,12 +34,15 @@ sealed class XlsxViewer : IDocViewer {
 	double zoom = 1.0;
 	int sheetCount;
 	bool editMode;
+	bool legacyBinary;
 	bool dirty;
 
 	public FrameworkElement View => root;
 	public string FilePath { get; private set; }
 	public string Title { get; private set; }
 	public DocKind Kind => DocKind.Xlsx;
+	/// <summary>.xls 等旧格式只读预览，不可编辑保存。</summary>
+	public bool CanEdit => !legacyBinary;
 	public bool EditMode {
 		get => editMode;
 		set => seteditmode(value);
@@ -71,7 +74,8 @@ sealed class XlsxViewer : IDocViewer {
 			}
 			var ed = editMode ? "  ·  编辑中" : "";
 			var d = dirty ? " *" : "";
-			return $"XLSX  {name}{d}  ·  {sheetCount} 表  ·  {(int)(zoom * 100)}%{ed}{sel}";
+			var fmt = legacyBinary ? "XLS" : "XLSX";
+			return $"{fmt}  {name}{d}  ·  {sheetCount} 表  ·  {(int)(zoom * 100)}%{ed}{sel}";
 		}
 	}
 	public int PageCount => Math.Max(1, sheetCount);
@@ -123,6 +127,9 @@ sealed class XlsxViewer : IDocViewer {
 		if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
 			throw new FileNotFoundException("文件不存在", path);
 		path = Path.GetFullPath(path);
+		var ext = Path.GetExtension(path).ToLowerInvariant();
+		if (ext == ".xls")
+			return LegacyOfficeLoader.PrepareXls(path);
 		var data = new XlsxLoadData {
 			Path = path,
 			Title = Path.GetFileName(path),
@@ -167,6 +174,7 @@ sealed class XlsxViewer : IDocViewer {
 		sheetNames.Clear();
 		sheetCount = 0;
 		editMode = false;
+		legacyBinary = data.LegacyBinary;
 		setdirty(false);
 
 		if (data.Sheets == null || data.Sheets.Count == 0) {
@@ -302,6 +310,7 @@ sealed class XlsxViewer : IDocViewer {
 
 	// ---------- 编辑模式 ----------
 	void seteditmode(bool on) {
+		if (legacyBinary && on) return;
 		if (editMode == on) return;
 		editMode = on;
 		foreach (var g in grids)
@@ -398,6 +407,8 @@ sealed class XlsxViewer : IDocViewer {
 
 	/// <summary>保存到原路径（或指定路径）。简单重写工作簿（值+样式+合并）。</summary>
 	public void Save(string path = null) {
+		if (legacyBinary)
+			throw new InvalidOperationException("XLS 格式仅支持预览，请另存为 XLSX 后编辑");
 		path = string.IsNullOrWhiteSpace(path) ? FilePath : Path.GetFullPath(path);
 		if (string.IsNullOrWhiteSpace(path))
 			throw new InvalidOperationException("无保存路径");
@@ -1287,6 +1298,7 @@ sealed class XlsxViewer : IDocViewer {
 		}
 
 		try {
+			// 仅文件内真实 AutoFilter 才启用筛选（无则 Filter*=-1，网格不画 ▼）
 			var af = ws.GetFirstChild<AutoFilter>();
 			var reff = af?.Reference?.Value;
 			if (!string.IsNullOrEmpty(reff) && tryparseref(reff, out var r0, out var c0, out var r1, out var c1)) {
@@ -1294,15 +1306,6 @@ sealed class XlsxViewer : IDocViewer {
 				model.FilterR1 = clampi(r1, 0, Math.Max(0, nRow - 1));
 				model.FilterC0 = clampi(c0, 0, Math.Max(0, nCol - 1));
 				model.FilterC1 = clampi(c1, 0, Math.Max(0, nCol - 1));
-			} else if (nRow > 1 && nCol > 0) {
-				// 无 AutoFilter 时仍允许按首行（或冻结底行）做列筛选
-				var hdr = model.FreezeRows > 0 ? model.FreezeRows - 1 : 0;
-				if (hdr < 0) hdr = 0;
-				if (hdr >= nRow) hdr = 0;
-				model.FilterR0 = hdr;
-				model.FilterR1 = nRow - 1;
-				model.FilterC0 = 0;
-				model.FilterC1 = nCol - 1;
 			}
 		} catch (Exception ex) {
 			DocLog.Warn($"read autofilter: {ex.Message}");
@@ -1500,6 +1503,8 @@ sealed class XlsxLoadData {
 	public string Path;
 	public string Title;
 	public List<XlsxSheetData> Sheets;
+	/// <summary>true 表示 .xls 等旧格式，只读。</summary>
+	public bool LegacyBinary;
 }
 
 sealed class XlsxSheetData {

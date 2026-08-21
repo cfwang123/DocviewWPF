@@ -8,6 +8,32 @@ Versions follow [Semantic Versioning](https://semver.org/) when tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **旧版 Office 只读打开**：**`.doc`** / **`.xls`**（NPOI HWPF / HSSF → 现有 DOCX/XLSX 查看器）；打开对话框与扩展名识别已纳入。
+- **命令行 IME 组字预览**：中文输入法组字串画在终端光标处（下划线高亮）；纯 ASCII 组字 + Enter 可当英文命令提交（如 `dir`）。
+- **命令行环境变量**：ConPTY 子进程强制 `TERM=xterm-256color`、`COLORTERM=truecolor`，便于 nvim 等启用 256 色 / truecolor。
+- **打包脚本**：`pack-release.js --build --publish` / `--publish-only`；Release 说明取自 `CHANGELOG.md` 对应版本节。
+
+### Changed
+
+- **命令行光标**：实心块光标、**不闪烁**（去掉 blink 定时器）；IME 锚点 TextBox 隐藏系统插入符，避免双光标。
+- **命令行输入路径**：无 IME 时字母/数字 `PreviewKeyDown` 直写 PTY；组字确认与 `TextInput` 写盘去抖，减少丢键/双写。
+
+### Fixed
+
+- **Markdown Tab**：源码与选区均为单个 `\\t`（不用空格冒充）；编辑区用定宽控件按 MdTabSize 显示列宽；Tab 键插入 `\\t`；列表缩进与预览 `tab-size` 同步。
+- **表格误显示第 1 行筛选**：仅当工作表自带 AutoFilter 时画筛选 ▼；无则不默认第 0 行/冻结行（装箱清单等标题行不再被当表头）。
+- **命令行 Alt+F4 无法关窗**：焦点在终端时不再把 Alt+F4 当 F4 注入 PTY；放行系统关窗。
+- **nvim / TUI 颜色错乱**：
+  - 擦除 / 滚行 / 插删字符支持 **BCE**（用当前背景色填充，避免黑条盖内容）
+  - 空单元格用 `Fg/Bg=-1`（默认色），不再误用 ANSI 0 号黑
+  - 宽字符绘制不再把「下一格 Ch==0」误判为续格
+  - CSI 支持 `:` 子参数（`38:2:R:G:B` truecolor）
+- **命令行字母不回显 / 光标飘移**：IME 组字可见；英文直写；光标跟在提示符与回显后。
+
+---
+
 ## [1.0.2] - 2026-08-07
 
 ### Added

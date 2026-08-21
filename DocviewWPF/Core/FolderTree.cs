@@ -33,6 +33,57 @@ static class FolderTree {
 		tree.Padding = new Thickness(0, 2, 0, 4);
 		ScrollViewer.SetHorizontalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
 		ScrollViewer.SetVerticalScrollBarVisibility(tree, ScrollBarVisibility.Auto);
+		// 选中/点击长文件名时默认 BringIntoView 会横向乱滚；只允许纵向滚入视口
+		tree.RequestBringIntoView -= onrequestbringintoview;
+		tree.RequestBringIntoView += onrequestbringintoview;
+	}
+
+	/// <summary>
+	/// 拦截默认 BringIntoView：保留当前水平滚动位置，必要时仅垂直滚到可见。
+	/// </summary>
+	static void onrequestbringintoview(object sender, RequestBringIntoViewEventArgs e) {
+		if (sender is not TreeView tree) return;
+		e.Handled = true;
+		try {
+			var sv = OutlineUi.FindScrollViewer(tree);
+			if (sv == null) return;
+			var hKeep = sv.HorizontalOffset;
+			var target = e.TargetObject as FrameworkElement ?? e.OriginalSource as FrameworkElement;
+			if (target == null || !target.IsLoaded) {
+				sv.ScrollToHorizontalOffset(hKeep);
+				return;
+			}
+			GeneralTransform tf;
+			try {
+				tf = target.TransformToAncestor(sv);
+			} catch {
+				sv.ScrollToHorizontalOffset(hKeep);
+				return;
+			}
+			var top = tf.Transform(new Point(0, 0)).Y;
+			var h = target.ActualHeight;
+			if (h < 1) h = 20;
+			if (double.IsNaN(top) || double.IsInfinity(top)) {
+				sv.ScrollToHorizontalOffset(hKeep);
+				return;
+			}
+			const double margin = 4;
+			double targetV = sv.VerticalOffset;
+			if (top < margin)
+				targetV = sv.VerticalOffset + top - margin;
+			else if (top + h > sv.ViewportHeight - margin)
+				targetV = sv.VerticalOffset + (top + h - sv.ViewportHeight) + margin;
+			if (targetV < 0) targetV = 0;
+			var maxV = Math.Max(0, sv.ExtentHeight - sv.ViewportHeight);
+			if (targetV > maxV) targetV = maxV;
+			if (Math.Abs(targetV - sv.VerticalOffset) > 0.5)
+				sv.ScrollToVerticalOffset(targetV);
+			// 始终锁住水平位置（含布局后异步再顶一次）
+			sv.ScrollToHorizontalOffset(hKeep);
+			tree.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() => {
+				try { sv.ScrollToHorizontalOffset(hKeep); } catch { /* ignore */ }
+			}));
+		} catch { /* ignore */ }
 	}
 
 	/// <summary>重建根：workspace 下一级子项。</summary>
@@ -142,11 +193,13 @@ static class FolderTree {
 				glyph = "🖼";
 			else if (string.Equals(ext, ".pdf", StringComparison.OrdinalIgnoreCase))
 				glyph = "📕";
-			else if (string.Equals(ext, ".xlsx", StringComparison.OrdinalIgnoreCase)
+			else if (string.Equals(ext, ".xls", StringComparison.OrdinalIgnoreCase)
+				|| string.Equals(ext, ".xlsx", StringComparison.OrdinalIgnoreCase)
 				|| string.Equals(ext, ".csv", StringComparison.OrdinalIgnoreCase)
 				|| string.Equals(ext, ".tsv", StringComparison.OrdinalIgnoreCase))
 				glyph = "📊";
-			else if (string.Equals(ext, ".docx", StringComparison.OrdinalIgnoreCase))
+			else if (string.Equals(ext, ".doc", StringComparison.OrdinalIgnoreCase)
+				|| string.Equals(ext, ".docx", StringComparison.OrdinalIgnoreCase))
 				glyph = "📘";
 		}
 		sp.Children.Add(new TextBlock {
@@ -162,6 +215,8 @@ static class FolderTree {
 			Foreground = TextFg,
 			VerticalAlignment = VerticalAlignment.Center,
 			TextTrimming = TextTrimming.CharacterEllipsis,
+			TextWrapping = TextWrapping.NoWrap,
+			// 不限制 MaxWidth：树可横向滚动查看全名；点击时不自动横滚（见 onrequestbringintoview）
 		});
 		return sp;
 	}

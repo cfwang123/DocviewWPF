@@ -23,9 +23,7 @@ sealed class TerminalControl : FrameworkElement {
 
 	readonly TerminalBuffer buf = new();
 	readonly VtParser parser;
-	readonly DispatcherTimer blinkTimer;
 	readonly Typeface typeface;
-	bool cursorOn = true;
 	bool focused;
 	double cellW = 8, cellH = 16;
 	double fontSize = 13;
@@ -76,6 +74,17 @@ sealed class TerminalControl : FrameworkElement {
 		}
 	}
 
+	/// <summary>
+	/// 外部 IME 宿主（透明 TextBox）组字预览：在终端光标处画下划线串，不写 PTY。
+	/// 传 null/空 清除。
+	/// </summary>
+	public void SetImeComposition(string text) {
+		var t = text ?? "";
+		if (imeComp == t) return;
+		imeComp = t;
+		try { InvalidateVisual(); } catch { /* ignore */ }
+	}
+
 	public TerminalControl() {
 		parser = new VtParser(buf);
 		parser.TitleChanged += t => {
@@ -99,13 +108,6 @@ sealed class TerminalControl : FrameworkElement {
 		TextCompositionManager.AddPreviewTextInputStartHandler(this, onimeStart);
 		TextCompositionManager.AddPreviewTextInputUpdateHandler(this, onimeUpdate);
 		TextCompositionManager.AddPreviewTextInputHandler(this, onimeComplete);
-
-		blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
-		blinkTimer.Tick += (_, _) => {
-			cursorOn = !cursorOn;
-			if (buf.CursorVisible && focused) InvalidateVisual();
-		};
-		blinkTimer.Start();
 
 		// 缩放停稳后再通知 ConPTY，避免拖窗时 Resize 风暴 + shell 狂刷
 		resizeNotifyTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
@@ -386,20 +388,29 @@ sealed class TerminalControl : FrameworkElement {
 		var rows = buf.Rows;
 		var cols = buf.Cols;
 		// 严格按单元格网格绘制（每字定位到 x*cellW），禁止整串 FormattedText 比例漂移
-		// 中文宽字符占 2 格；续格 Ch==0 只画背景
+		// 中文宽字符占 2 格；续格 Ch==0 只画背景。勿用「下格 Ch==0 ⇒ 宽字符」——空格/BCE 空单元也是 Ch==0。
 		for (var y = 0; y < rows; y++) {
 			var py = y * cellH;
 			for (var x = 0; x < cols; ) {
 				var cell = buf.Get(x, y);
+				// 续格：字头是宽字符时只画背景（属性跟字头）
 				if (cell.Ch == 0) {
-					var bgOnly = TerminalPalette.GetBg(cell);
-					if (bgOnly != null)
-						dc.DrawRectangle(bgOnly, null, new Rect(x * cellW, py, cellW, cellH));
+					if (x > 0) {
+						var head = buf.Get(x - 1, y);
+						if (head.Ch != 0 && TerminalBuffer.IsWide(head.Ch)) {
+							// 字头已按 2 格画过，跳过
+							x++;
+							continue;
+						}
+					}
+					// 真正的空单元 / BCE 空格被清成 \0 的单元：画背景
+					var bgEmpty = TerminalPalette.GetBg(cell);
+					if (bgEmpty != null)
+						dc.DrawRectangle(bgEmpty, null, new Rect(x * cellW, py, cellW, cellH));
 					x++;
 					continue;
 				}
-				var wide = TerminalBuffer.IsWide(cell.Ch)
-					|| (x + 1 < cols && buf.Get(x + 1, y).Ch == 0);
+				var wide = TerminalBuffer.IsWide(cell.Ch);
 				var ncells = wide && x + 1 < cols ? 2 : 1;
 				var rect = new Rect(x * cellW, py, ncells * cellW, cellH);
 				var bgc = TerminalPalette.GetBg(cell);
@@ -407,7 +418,7 @@ sealed class TerminalControl : FrameworkElement {
 					dc.DrawRectangle(bgc, null, rect);
 				else if (cell.Inverse)
 					dc.DrawRectangle(TerminalPalette.GetFg(cell), null, rect);
-				if (cell.Ch != ' ' && cell.Ch != 0) {
+				if (cell.Ch != ' ') {
 					var useFg = cell.Inverse
 						? (bgc ?? TerminalPalette.DefaultBg)
 						: TerminalPalette.GetFg(cell);
@@ -419,8 +430,8 @@ sealed class TerminalControl : FrameworkElement {
 				x += ncells;
 			}
 		}
-		// IME 组字预览（光标处，下划线，未写入 PTY）
-		if (focused && !string.IsNullOrEmpty(imeComp)) {
+		// IME 组字预览（光标处，下划线，未写入 PTY）。焦点常在透明 TextBox，不依赖 focused。
+		if (!string.IsNullOrEmpty(imeComp)) {
 			var cx = buf.CursorX;
 			var cy = buf.CursorY;
 			if (cx >= 0 && cy >= 0 && cy < rows) {
@@ -447,14 +458,12 @@ sealed class TerminalControl : FrameworkElement {
 					new Rect(px, py + cellH - 2, tw, 2));
 			}
 		}
-		// 光标
-		if (focused && buf.CursorVisible && cursorOn && string.IsNullOrEmpty(imeComp)) {
-			var cx = buf.CursorX;
-			var cy = buf.CursorY;
-			if (cx >= 0 && cy >= 0 && cx < cols && cy < rows) {
-				var r = new Rect(cx * cellW, cy * cellH, Math.Max(2, cellW * 0.9), cellH);
-				dc.DrawRectangle(TerminalPalette.CursorBrush, null, r);
-			}
+		// 实心光标：始终绘制、不闪烁。焦点常在透明 IME 框，故不依赖 focused。
+		if (buf.CursorVisible && string.IsNullOrEmpty(imeComp)) {
+			var cx = Math.Max(0, Math.Min(buf.CursorX, Math.Max(0, cols - 1)));
+			var cy = Math.Max(0, Math.Min(buf.CursorY, Math.Max(0, rows - 1)));
+			var r = new Rect(cx * cellW, cy * cellH, Math.Max(2, cellW * 0.9), cellH);
+			dc.DrawRectangle(TerminalPalette.CursorBrush, null, r);
 		}
 	}
 
@@ -576,6 +585,10 @@ sealed class TerminalControl : FrameworkElement {
 		var ctrl = (mods & ModifierKeys.Control) != 0;
 		var alt = (mods & ModifierKeys.Alt) != 0;
 
+		// Alt+F4 关闭窗口，勿注入 PTY
+		if (alt && !ctrl && k == Key.F4)
+			return;
+
 		// 可打印键一律不抢 KeyDown → 走 TextInput（英文）或 IME 组字（中文）
 		// 若此处 ToUnicode+Handled，IME 永远收不到键，且首次进标签更明显
 		if (!ctrl && !alt && k != Key.ImeProcessed && k != Key.DeadCharProcessed) {
@@ -584,7 +597,8 @@ sealed class TerminalControl : FrameworkElement {
 				return;
 			}
 		}
-		if (HandleKeyDown(e.Key, mods))
+		// Alt 组合用真实键（SystemKey），避免 Key.System 被直接丢掉
+		if (HandleKeyDown(k, mods))
 			e.Handled = true;
 	}
 
@@ -662,6 +676,10 @@ sealed class TerminalControl : FrameworkElement {
 		var ctrl = (mods & ModifierKeys.Control) != 0;
 		var alt = (mods & ModifierKeys.Alt) != 0;
 		var shift = (mods & ModifierKeys.Shift) != 0;
+
+		// Windows 关窗：Alt+F4 不进 PTY
+		if (alt && !ctrl && key == Key.F4)
+			return false;
 
 		// 可打印键不走 KeyDown（TextInput/IME）；双保险
 		if (!ctrl && !alt && isconsoleprintablekey(key)) {
@@ -1103,7 +1121,6 @@ sealed class TerminalControl : FrameworkElement {
 	}
 
 	public void DisposeResources() {
-		try { blinkTimer.Stop(); } catch { /* ignore */ }
 		try { resizeNotifyTimer?.Stop(); } catch { /* ignore */ }
 		unhookime();
 		try {
@@ -1193,6 +1210,9 @@ struct TermCell {
 	public byte Attr; // bit0 bold, bit1 dim, bit2 underline, bit3 inverse, bit4 italic
 	public bool Bold => (Attr & 1) != 0;
 	public bool Inverse => (Attr & 8) != 0;
+
+	/// <summary>空单元：默认前景/背景（切勿用 default，否则 Fg/Bg=0 被当成 ANSI 黑）。</summary>
+	public static TermCell Empty => new() { Ch = '\0', Fg = -1, Bg = -1, Attr = 0 };
 }
 
 sealed class TerminalBuffer {
@@ -1281,14 +1301,23 @@ sealed class TerminalBuffer {
 	}
 
 	static void clearfull(TermCell[] a) {
+		var e = TermCell.Empty;
 		for (var i = 0; i < a.Length; i++)
-			a[i] = default;
+			a[i] = e;
 	}
 
 	public TermCell Get(int x, int y) {
-		if (x < 0 || y < 0 || x >= Cols || y >= Rows) return default;
+		if (x < 0 || y < 0 || x >= Cols || y >= Rows) return TermCell.Empty;
 		return cells[y * Cols + x];
 	}
+
+	/// <summary>BCE：用当前画笔填空格（nvim/TUI 擦除/滚行依赖背景色，不能 default 成透明黑块）。</summary>
+	public TermCell BceCell() => new() {
+		Ch = ' ',
+		Fg = CurFg,
+		Bg = CurBg,
+		Attr = CurAttr,
+	};
 
 	void set(int x, int y, TermCell c) {
 		if (x < 0 || y < 0 || x >= Cols || y >= Rows) return;
@@ -1305,8 +1334,8 @@ sealed class TerminalBuffer {
 			if (CursorX > 0) CursorX--;
 			if (CursorX < Cols && Get(CursorX, CursorY).Ch == 0 && CursorX > 0) {
 				CursorX--;
-				set(CursorX, CursorY, default);
-				if (CursorX + 1 < Cols) set(CursorX + 1, CursorY, default);
+				set(CursorX, CursorY, TermCell.Empty);
+				if (CursorX + 1 < Cols) set(CursorX + 1, CursorY, TermCell.Empty);
 			}
 			return;
 		}
@@ -1366,14 +1395,14 @@ sealed class TerminalBuffer {
 			if (x > 0) {
 				var h = Get(x - 1, CursorY);
 				if (h.Ch != 0 && IsWide(h.Ch))
-					set(x - 1, CursorY, default);
+					set(x - 1, CursorY, TermCell.Empty);
 			}
-			set(x, CursorY, default);
+			set(x, CursorY, TermCell.Empty);
 			return;
 		}
 		if (IsWide(c.Ch) && x + 1 < Cols)
-			set(x + 1, CursorY, default);
-		set(x, CursorY, default);
+			set(x + 1, CursorY, TermCell.Empty);
+		set(x, CursorY, TermCell.Empty);
 	}
 
 	/// <summary>East Asian Width：W/F 为双列（与 Windows 控制台一致）。</summary>
@@ -1460,50 +1489,56 @@ sealed class TerminalBuffer {
 
 	void clearrow(int y) {
 		if (y < 0 || y >= Rows) return;
-		var i0 = y * Cols;
-		Array.Clear(cells, i0, Cols);
+		// 滚行空白行用 BCE，与 xterm/Windows Terminal 一致（nvim 状态栏/分屏依赖）
+		var fill = BceCell();
+		for (var x = 0; x < Cols; x++)
+			set(x, y, fill);
 	}
 
 	public void EraseInDisplay(int mode) {
+		var fill = BceCell();
 		if (mode == 0) { // 光标到末尾
 			EraseInLine(0);
 			for (var y = CursorY + 1; y < Rows; y++)
-				for (var x = 0; x < Cols; x++) set(x, y, default);
+				for (var x = 0; x < Cols; x++) set(x, y, fill);
 		} else if (mode == 1) {
 			for (var y = 0; y < CursorY; y++)
-				for (var x = 0; x < Cols; x++) set(x, y, default);
+				for (var x = 0; x < Cols; x++) set(x, y, fill);
 			EraseInLine(1);
 		} else {
 			for (var y = 0; y < Rows; y++)
-				for (var x = 0; x < Cols; x++) set(x, y, default);
+				for (var x = 0; x < Cols; x++) set(x, y, fill);
 			if (mode == 3) { /* 清 scrollback：无 */ }
 		}
 	}
 
 	public void EraseInLine(int mode) {
+		var fill = BceCell();
 		if (mode == 0) {
-			for (var x = CursorX; x < Cols; x++) set(x, CursorY, default);
+			for (var x = CursorX; x < Cols; x++) set(x, CursorY, fill);
 		} else if (mode == 1) {
-			for (var x = 0; x <= CursorX && x < Cols; x++) set(x, CursorY, default);
+			for (var x = 0; x <= CursorX && x < Cols; x++) set(x, CursorY, fill);
 		} else {
-			for (var x = 0; x < Cols; x++) set(x, CursorY, default);
+			for (var x = 0; x < Cols; x++) set(x, CursorY, fill);
 		}
 	}
 
 	public void DeleteChars(int n) {
 		n = Math.Max(1, n);
+		var fill = BceCell();
 		for (var x = CursorX; x < Cols; x++) {
 			var src = x + n;
-			set(x, CursorY, src < Cols ? Get(src, CursorY) : default);
+			set(x, CursorY, src < Cols ? Get(src, CursorY) : fill);
 		}
 	}
 
 	public void InsertChars(int n) {
 		n = Math.Max(1, n);
+		var fill = BceCell();
 		for (var x = Cols - 1; x >= CursorX + n; x--)
 			set(x, CursorY, Get(x - n, CursorY));
 		for (var x = CursorX; x < CursorX + n && x < Cols; x++)
-			set(x, CursorY, default);
+			set(x, CursorY, fill);
 	}
 
 	public void DeleteLines(int n) {
@@ -1664,7 +1699,8 @@ sealed class VtParser {
 					csiParam = csiParam * 10 + (b - '0');
 					return;
 				}
-				if (b == ';') {
+				// ';' 标准参数分隔；':' ISO 8613-6 子参数（nvim truecolor: 38:2:R:G:B）
+				if (b == ';' || b == ':') {
 					csiParams.Add(csiParam < 0 ? 0 : csiParam);
 					csiParam = -1;
 					return;
@@ -1762,12 +1798,13 @@ sealed class VtParser {
 			}
 			case 's': buf.SaveCursor(); break;
 			case 'u': buf.RestoreCursor(); break;
-			case 'X': { // 擦除 n 字符（不移动光标）
+			case 'X': { // 擦除 n 字符（不移动光标，BCE）
 				var n = Math.Max(1, p(0, 1));
 				var x0 = buf.CursorX;
 				var y0 = buf.CursorY;
+				var fill = buf.BceCell();
 				for (var i = 0; i < n && x0 + i < buf.Cols; i++)
-					buf.PutCellRaw(x0 + i, y0, default);
+					buf.PutCellRaw(x0 + i, y0, fill);
 				break;
 			}
 		}
@@ -1830,14 +1867,23 @@ sealed class VtParser {
 					if (i + 1 >= csiParams.Count) break;
 					var mode = csiParams[++i];
 					if (mode == 5 && i + 1 < csiParams.Count) {
+						// 256 色：38;5;N 或 38:5:N
 						var idx = csiParams[++i];
+						if (idx < 0) idx = 0;
+						if (idx > 255) idx = 255;
 						if (isFg) buf.CurFg = idx; else buf.CurBg = idx;
-					} else if (mode == 2 && i + 3 < csiParams.Count) {
-						var r = csiParams[++i];
-						var g = csiParams[++i];
-						var b = csiParams[++i];
-						var rgb = 0x1000000 | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
-						if (isFg) buf.CurFg = rgb; else buf.CurBg = rgb;
+					} else if (mode == 2) {
+						// truecolor：38;2;R;G;B 或 38:2:Cs:R:G:B / 38:2::R:G:B
+						var left = csiParams.Count - i - 1;
+						if (left >= 4)
+							i++; // 跳过 color space id
+						if (i + 3 < csiParams.Count) {
+							var r = csiParams[++i] & 255;
+							var g = csiParams[++i] & 255;
+							var b = csiParams[++i] & 255;
+							var rgb = 0x1000000 | (r << 16) | (g << 8) | b;
+							if (isFg) buf.CurFg = rgb; else buf.CurBg = rgb;
+						}
 					}
 					break;
 				}
@@ -1917,13 +1963,19 @@ static class TerminalPalette {
 
 	public static Brush GetFg(TermCell c) {
 		var v = c.Inverse ? c.Bg : c.Fg;
+		// inverse 且对侧为 default：用默认底/字色
 		if (c.Inverse && v < 0) return DefaultBg;
+		if (!c.Inverse && v < 0) return DefaultFg;
 		return colorof(v, DefaultFg, c.Bold && !c.Inverse);
 	}
 
 	public static Brush GetBg(TermCell c) {
 		var v = c.Inverse ? c.Fg : c.Bg;
-		if (v < 0) return null;
+		// default 背景不单独填（底层已是 DefaultBg）；inverse 时 default 前景→默认字色作底
+		if (v < 0) {
+			if (c.Inverse) return DefaultFg;
+			return null;
+		}
 		return colorof(v, DefaultBg, false);
 	}
 

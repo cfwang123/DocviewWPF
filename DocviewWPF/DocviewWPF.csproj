@@ -31,9 +31,12 @@
   <ItemGroup>
     <!-- PDF 渲染：pdfium + SkiaSharp，按页懒加载 -->
     <PackageReference Include="Emoji.Wpf" Version="0.3.4" />
+    <PackageReference Include="NPOI.HWPF" Version="2.3.0" />
     <PackageReference Include="PDFtoImage" Version="5.1.1" />
     <!-- DOCX / XLSX 解析 -->
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
+    <!-- 旧版 Word / Excel（.doc / .xls）；与 NPOI.HWPF 同版本 -->
+    <PackageReference Include="NPOI" Version="2.3.0" />
     <PackageReference Include="System.Memory" Version="4.6.3" />
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <!-- MD 预览：WebView2 HTML 渲染 -->
